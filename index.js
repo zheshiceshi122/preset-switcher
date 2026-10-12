@@ -447,6 +447,7 @@ function openEditor(entry) {
         onChange: enabled => setManageMode(enabled),
     };
     const { backdrop, body, footer, close } = createDialog(`编辑「${entry.name}」的角色专属版本`, '', { helpText, modeOptions });
+    backdrop.querySelector('.ps-dialog').classList.add('ps-prompt-editor');
     backdrop.querySelector('.ps-dialog-description').hidden = true;
     body.classList.add('ps-editor-dialog-body');
     const prompts = clone(Array.isArray(entry.value.prompts) ? entry.value.prompts : []);

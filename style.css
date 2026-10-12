@@ -396,6 +396,13 @@
     margin: 0 0 .4rem;
 }
 
+.ps-dialog.ps-prompt-editor {
+    box-sizing: border-box;
+    height: 80dvh;
+    max-height: 80dvh;
+    max-width: 68rem;
+}
+
 .ps-dialog-titlebar {
     align-items: flex-start;
     display: flex;
@@ -717,8 +724,18 @@
 
 .ps-entry-enabled {
     align-items: center;
+    cursor: pointer;
     display: flex;
-    gap: .4rem;
+    gap: .65rem;
+    min-height: 44px;
+}
+
+.ps-entry-enabled input[type="checkbox"] {
+    cursor: pointer;
+    flex: 0 0 24px;
+    height: 24px;
+    margin: 0;
+    width: 24px;
 }
 
 .ps-prompt-content {
@@ -793,14 +810,18 @@
 }
 
 @media (max-width: 600px) {
+    .ps-dialog.ps-prompt-editor {
+        padding: .75rem;
+    }
+
     .ps-prompt-workspace {
         grid-template-columns: minmax(0, 1fr);
         grid-template-rows: minmax(0, 1fr);
     }
 
     .ps-entry-list {
-        flex: 0 0 auto;
-        height: min(26vh, 9rem);
+        flex: 1 1 auto;
+        height: auto;
         min-height: 5rem;
     }
 
