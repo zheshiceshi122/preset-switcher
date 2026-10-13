@@ -617,6 +617,34 @@
     padding: .2rem .35rem;
 }
 
+.ps-group-header {
+    align-items: center;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #6955c7) 12%, transparent);
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, .16));
+    display: flex;
+    gap: .5rem;
+    min-height: 44px;
+    padding: .2rem .35rem;
+}
+
+.ps-group-header .ps-group-title {
+    background: transparent;
+    border: 0;
+    flex: 1;
+    justify-content: flex-start;
+    margin: 0;
+    min-width: 0;
+    overflow: hidden;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    width: auto;
+}
+
+.ps-group-disabled .ps-entry-select {
+    color: var(--SmartThemeEmColor, #aaa);
+}
+
 .ps-entry-list.ps-manage-mode .ps-entry-row {
     grid-template-columns: 1.5rem minmax(0, 1fr) 1.8rem 2.75rem 2rem;
 }
@@ -864,6 +892,58 @@
     width: 100%;
 }
 
+.ps-conflict-compare {
+    display: grid;
+    gap: .6rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ps-conflict-value {
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, .16));
+    border-radius: .5rem;
+    min-width: 0;
+    padding: .6rem;
+}
+
+.ps-conflict-value strong {
+    display: block;
+    font-size: .85rem;
+}
+
+.ps-conflict-value pre,
+.ps-conflict-text {
+    font-family: var(--mainFontFamily, sans-serif);
+}
+
+.ps-conflict-value mark {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #b88b26) 35%, transparent);
+    border-radius: .15rem;
+    color: inherit;
+}
+
+.ps-conflict-value button {
+    margin: 0;
+    white-space: nowrap;
+    width: auto;
+}
+
+.ps-conflict-chosen {
+    border-color: var(--SmartThemeQuoteColor, #b88b26);
+}
+
+.ps-conflict-baseline {
+    color: var(--SmartThemeEmColor, #aaa);
+    margin: .6rem 0;
+}
+
+.ps-conflict-baseline summary {
+    cursor: pointer;
+}
+
+.ps-conflict-custom:is(input, select) {
+    min-height: 2.5rem;
+}
+
 .ps-conflict-custom {
     min-height: 7rem;
 }
@@ -881,6 +961,9 @@
 }
 
 @media (max-width: 600px) {
+    .ps-conflict-compare {
+        grid-template-columns: minmax(0, 1fr);
+    }
     .ps-dialog.ps-prompt-editor {
         padding: .75rem;
     }

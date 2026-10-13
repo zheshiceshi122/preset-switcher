@@ -3,6 +3,7 @@ import { selected_group } from '../../../group-chats.js';
 import { extension_settings, writeExtensionField } from '../../../extensions.js';
 import { getPresetManager } from '../../../preset-manager.js';
 import * as chatCompletion from '../../../openai.js';
+import { comparableExtensions, readPromptGroups, writePromptGroups } from './baibai-groups.js';
 
 const DATA_KEY = 'preset_switcher';
 const UI_SETTINGS_KEY = 'preset_switcher_ui';
@@ -75,6 +76,7 @@ function getUiSettings() {
         topRatio: Number.isFinite(value.topRatio) ? Math.min(1, Math.max(0, value.topRatio)) : 0.68,
         launcherImage: typeof value.launcherImage === 'string' ? value.launcherImage : '',
         launcherVisible: value.launcherVisible !== false,
+        editorCollapsedGroups: isObject(value.editorCollapsedGroups) ? value.editorCollapsedGroups : {},
         viewMode: value.viewMode === 'quick' ? 'quick' : 'full',
         preserveApiSettings: value.preserveApiSettings === true,
     };
@@ -223,7 +225,7 @@ function isCopyAlreadyApplied(entry) {
     return Object.entries(chatCompletion.settingsToUpdate).every(([key, definition]) => {
         if (definition?.[3] && (preserveApi || !chatCompletion.oai_settings?.bind_preset_to_connection)) return true;
         if (preserveApi && key === 'chat_completion_source') return true;
-        if (key === 'extensions') return equal(current[key] ?? {}, entry.value[key] ?? {});
+        if (key === 'extensions') return equal(comparableExtensions(current[key], entry.value[key]), comparableExtensions(entry.value[key], current[key]));
         return entry.value[key] === undefined || equal(current[key], entry.value[key]);
     });
 }
@@ -295,6 +297,7 @@ function getArrayKey(item) {
     if (!isObject(item)) return null;
     if (typeof item.identifier === 'string' && item.identifier) return `@${item.identifier}`;
     if (item.character_id !== undefined && item.character_id !== null) return `#${item.character_id}`;
+    if (typeof item.id === 'string' && item.id) return `!${item.id}`;
     return null;
 }
 
@@ -316,7 +319,7 @@ function setAtPath(value, path, replacement) {
             current = current.find(item => getArrayKey(item) === key);
             if (!current) return value;
         } else {
-            if (!isObject(current[key])) current[key] = {};
+            if (!isObject(current[key]) && !Array.isArray(current[key])) current[key] = {};
             current = current[key];
         }
     }
@@ -403,8 +406,57 @@ function threeWayMerge(base, local, latest, path = [], conflicts = []) {
     return clone(local);
 }
 
-function formatValue(value) {
-    return value === MISSING ? '（该字段不存在）' : JSON.stringify(value, null, 2);
+const CONFLICT_LABELS = {
+    prompts: '提示词', prompt_order: '发送顺序', extensions: '扩展设置', baibaiToolkit: '柏宝箱',
+    presetPromptGroups: '提示词分组', regexGroups: '正则分组', groups: '分组', groupId: '所属分组',
+    name: '名称', content: '提示词内容', role: '发送身份', enabled: '启用开关', collapsed: '折叠状态',
+    order: '顺序', system_prompt: '系统提示词', marker: '占位条目', temperature: '温度', top_p: 'Top P',
+};
+
+function conflictItemName(key, entry, latest) {
+    const identifier = key.slice(1);
+    if (key.startsWith('@')) return (latest.prompts ?? []).find(item => item.identifier === identifier)?.name
+        || (entry.value.prompts ?? []).find(item => item.identifier === identifier)?.name || identifier;
+    if (key.startsWith('!')) return readPromptGroups(entry.base)?.groups.find(group => group.id === identifier)?.name
+        || readPromptGroups(entry.value)?.groups.find(group => group.id === identifier)?.name
+        || readPromptGroups(latest)?.groups.find(group => group.id === identifier)?.name || identifier;
+    return identifier;
+}
+
+function conflictValueText(value, entry, latest, key = '') {
+    if (value === MISSING) return '（不存在／已删除）';
+    if (value === null) return '（空值）';
+    if (typeof value === 'boolean') return key === 'collapsed' ? (value ? '收起' : '展开') : (value ? '开启' : '关闭');
+    if (typeof value === 'string') {
+        if (key === 'role') return ({ system: '系统', user: '用户', assistant: '助手' })[value] ?? value;
+        if (key === 'groupId') return conflictItemName(`!${value}`, entry, latest);
+        return value || '（空文本）';
+    }
+    if (Array.isArray(value)) return value.map((item, i) => {
+        const text = key === '$order' && typeof item === 'string' ? conflictItemName(item, entry, latest) : conflictValueText(item, entry, latest);
+        return `${i + 1}. ${text}`;
+    }).join('\n') || '（空列表）';
+    if (isObject(value)) return Object.entries(value).map(([field, item]) => `${CONFLICT_LABELS[field] ?? field}：${conflictValueText(item, entry, latest, field)}`).join('\n') || '（空对象）';
+    return String(value);
+}
+
+function appendChangedText(element, text, baseline) {
+    let start = 0;
+    while (start < text.length && start < baseline.length && text[start] === baseline[start]) start++;
+    let end = text.length;
+    let baseEnd = baseline.length;
+    while (end > start && baseEnd > start && text[end - 1] === baseline[baseEnd - 1]) { end--; baseEnd--; }
+    element.append(document.createTextNode(text.slice(0, start)));
+    if (end > start) {
+        const changed = document.createElement('mark');
+        changed.textContent = text.slice(start, end);
+        element.append(changed);
+    } else if (text !== baseline) {
+        const removed = document.createElement('mark');
+        removed.textContent = '〔此处有删除〕';
+        element.append(removed);
+    }
+    element.append(document.createTextNode(text.slice(end)));
 }
 
 function showEditorHelp(helpText, modeOptions = null) {
@@ -485,7 +537,7 @@ function createDialog(title, description, { helpText = '', modeOptions = null } 
 
 function openEditor(entry) {
     const characterId = activeCharacterId();
-    const helpText = '在列表直接勾选条目开关，可连续调整多条后统一保存；点击条目名称编辑内容。收藏会跨角色显示；保存只修改当前角色卡的这个预设副本。仅编辑模式不会改变条目结构；完整模式可新建、删除条目，并长按拖动手柄调整顺序。条目和预设列表都支持输入页码跳转。';
+    const helpText = '在列表直接调整条目开关，可连续修改多条后统一保存；点击名称编辑内容。柏宝箱分组支持折叠和整组开关；整组停用不改变成员各自的开关。搜索会显示折叠组中的匹配条目。收藏会跨角色显示；保存只修改当前角色卡的这个副本。仅编辑模式不会改变条目结构；完整模式可新建、删除条目，并长按拖动手柄调整顺序，拖到其他组的条目旁会加入该组。列表支持输入页码跳转。';
     const modeOptions = {
         getEnabled: () => manageMode,
         onChange: enabled => setManageMode(enabled),
@@ -498,6 +550,12 @@ function openEditor(entry) {
     const orderGroups = clone(Array.isArray(entry.value.prompt_order) ? entry.value.prompt_order : []);
     const originalPrompts = clone(prompts);
     const originalOrderGroups = clone(orderGroups);
+    let promptGroups = readPromptGroups(entry.value);
+    let originalPromptGroups = clone(promptGroups);
+    let promptGroupById = new Map((promptGroups?.groups ?? []).map(group => [group.id, group]));
+    const foldKey = JSON.stringify([characters?.[characterId]?.avatar ?? characterId, entry.name]);
+    const savedFolds = getUiSettings().editorCollapsedGroups[foldKey];
+    const collapsedGroupIds = new Set(Array.isArray(savedFolds) ? savedFolds : (promptGroups?.groups ?? []).filter(group => group.collapsed).map(group => group.id));
     const favoriteKey = 'preset-switcher:favorites:v1';
     const readFavorites = () => {
         try {
@@ -593,12 +651,22 @@ function openEditor(entry) {
     }
 
     function savedEnabled(identifier) {
-        const rows = orderGroups.flatMap(group => group.order ?? []);
+        const rows = editorOrderGroup()?.order ?? [];
         return rows.find(row => row.identifier === identifier)?.enabled !== false;
     }
 
+    function editorOrderGroup() {
+        const configuration = chatCompletion.promptManager?.configuration?.promptOrder;
+        const id = configuration?.strategy === 'character'
+            ? chatCompletion.promptManager?.activeCharacter?.id
+            : configuration?.dummyId ?? 100001;
+        return orderGroups.find(group => String(group.character_id) === String(id))
+            ?? orderGroups.find(group => group.order?.length)
+            ?? orderGroups[0];
+    }
+
     function hasPendingChanges() {
-        return dirty || structureDirty || enabledOverrides.size > 0;
+        return dirty || structureDirty || enabledOverrides.size > 0 || !equal(promptGroups, originalPromptGroups);
     }
 
     function setPromptEnabled(identifier, enabled) {
@@ -608,7 +676,7 @@ function openEditor(entry) {
             if (row.dataset.identifier !== identifier) continue;
             const checkbox = row.querySelector('.ps-entry-toggle input');
             checkbox.checked = enabled;
-            checkbox.parentElement.title = enabled ? '已启用，点击停用' : '已停用，点击启用';
+            checkbox.parentElement.title = `${enabled ? '条目已启用，点击停用' : '条目已停用，点击启用'}${getPromptGroup(identifier)?.enabled === false ? '；所属分组已停用' : ''}`;
         }
         if (draftIdentifier === identifier) {
             const checkbox = detail.querySelector('.ps-entry-enabled input');
@@ -658,12 +726,63 @@ function openEditor(entry) {
 
     function filteredPrompts() {
         const needle = query.trim().toLocaleLowerCase();
-        return prompts.filter(prompt => {
+        const byId = new Map(prompts.map(prompt => [prompt?.identifier, prompt]));
+        const orderedIds = [...new Set((editorOrderGroup()?.order ?? []).map(row => row.identifier))];
+        const ordered = orderedIds.map(id => byId.get(id)).filter(Boolean);
+        const included = new Set(orderedIds);
+        ordered.push(...prompts.filter(prompt => !included.has(prompt?.identifier)));
+        const matches = ordered.filter(prompt => {
             if (!prompt?.identifier) return false;
             if (favoritesOnly && !favorites.has(prompt.identifier)) return false;
             const name = draftIdentifier === prompt.identifier && draft ? draft.name : prompt.name;
-            return !needle || String(name ?? '').toLocaleLowerCase().includes(needle) || String(prompt.identifier).toLocaleLowerCase().includes(needle);
+            const group = getPromptGroup(prompt.identifier);
+            return !needle || String(name ?? '').toLocaleLowerCase().includes(needle) || String(prompt.identifier).toLocaleLowerCase().includes(needle) || group?.name.toLocaleLowerCase().includes(needle);
         });
+        return matches;
+    }
+
+    function getPromptGroup(identifier) {
+        const groupId = promptGroups?.prompts?.[identifier]?.groupId;
+        return promptGroupById.get(groupId) ?? null;
+    }
+
+    function renderGroupHeader(group, pageCount, totalCount) {
+        const header = document.createElement('div');
+        header.className = 'ps-group-header';
+        header.dataset.groupId = group?.id ?? '';
+        const expanded = !group || !collapsedGroupIds.has(group.id) || Boolean(query.trim()) || favoritesOnly;
+        const title = makeButton(`${expanded ? '▾' : '▸'} ${group?.name ?? '未分组'}`, () => {
+            if (!group) return;
+            if (collapsedGroupIds.has(group.id)) collapsedGroupIds.delete(group.id);
+            else collapsedGroupIds.add(group.id);
+            saveUiSettings({ editorCollapsedGroups: { ...getUiSettings().editorCollapsedGroups, [foldKey]: [...collapsedGroupIds] } });
+            renderRows(false);
+        }, 'ps-group-title');
+        title.disabled = !group;
+        title.setAttribute('aria-expanded', String(expanded));
+        const count = document.createElement('span');
+        count.className = 'ps-result-count';
+        count.textContent = pageCount === totalCount ? `${totalCount} 条` : `本段 ${pageCount} / ${totalCount} 条`;
+        header.append(title, count);
+        if (group) {
+            const toggle = document.createElement('label');
+            toggle.className = 'ps-entry-toggle';
+            toggle.title = '需开启柏宝箱的预设分组；整组开关不改变成员各自的开关';
+            const enabled = document.createElement('input');
+            enabled.type = 'checkbox';
+            enabled.setAttribute('role', 'switch');
+            enabled.setAttribute('aria-label', `启用分组${group.name}`);
+            enabled.checked = group.enabled !== false;
+            enabled.addEventListener('change', () => {
+                group.enabled = enabled.checked;
+                renderRows(false);
+                renderDetail();
+            });
+            toggle.append(enabled);
+            header.append(toggle);
+        }
+        list.append(header);
+        return expanded;
     }
 
     function renderRows(resetPage) {
@@ -681,11 +800,30 @@ function openEditor(entry) {
         list.replaceChildren();
         list.classList.toggle('ps-manage-mode', manageMode);
 
-        for (const prompt of pageItems) {
+        const totalCounts = new Map();
+        for (const prompt of filtered) {
+            const id = getPromptGroup(prompt.identifier)?.id ?? '';
+            totalCounts.set(id, (totalCounts.get(id) ?? 0) + 1);
+        }
+        let previousGroupId;
+        let segmentExpanded = true;
+
+        for (const [index, prompt] of pageItems.entries()) {
+            const group = getPromptGroup(prompt.identifier);
+            const groupId = group?.id ?? '';
+            if (promptGroups?.groups.length && previousGroupId !== groupId) {
+                previousGroupId = groupId;
+                let segmentCount = 1;
+                while (index + segmentCount < pageItems.length && (getPromptGroup(pageItems[index + segmentCount].identifier)?.id ?? '') === groupId) segmentCount++;
+                segmentExpanded = renderGroupHeader(group, segmentCount, totalCounts.get(groupId));
+            }
+            if (!segmentExpanded) continue;
             const displayName = draftIdentifier === prompt.identifier && draft ? draft.name : prompt.name;
             const row = document.createElement('div');
             row.className = `ps-entry-row${prompt.identifier === selectedIdentifier ? ' ps-entry-row-selected' : ''}`;
             row.dataset.identifier = prompt.identifier;
+            row.dataset.groupId = groupId;
+            row.classList.toggle('ps-group-disabled', group?.enabled === false);
             row.setAttribute('role', 'option');
             row.setAttribute('aria-selected', String(prompt.identifier === selectedIdentifier));
             const handle = makeButton('⠿', () => {}, 'ps-drag-handle');
@@ -711,11 +849,12 @@ function openEditor(entry) {
                 showPromptDetail();
             }, 'ps-entry-select');
             select.title = displayName || prompt.identifier;
+            if (group?.enabled === false) select.title += '（所属分组已停用）';
             const star = makeButton(favorites.has(prompt.identifier) ? '★' : '☆', () => toggleFavorite(prompt.identifier), 'ps-entry-star');
             star.title = favorites.has(prompt.identifier) ? '取消收藏' : '收藏条目';
             const toggle = document.createElement('label');
             toggle.className = 'ps-entry-toggle';
-            toggle.title = isEnabled(prompt.identifier) ? '已启用，点击停用' : '已停用，点击启用';
+            toggle.title = `${isEnabled(prompt.identifier) ? '条目已启用，点击停用' : '条目已停用，点击启用'}${group?.enabled === false ? '；所属分组已停用' : ''}`;
             const enabled = document.createElement('input');
             enabled.type = 'checkbox';
             enabled.setAttribute('role', 'switch');
@@ -796,6 +935,7 @@ function openEditor(entry) {
         prompts.splice(index, 1);
         for (const group of orderGroups) group.order = (group.order ?? []).filter(item => item.identifier !== prompt.identifier);
         enabledOverrides.delete(prompt.identifier);
+        if (promptGroups) delete promptGroups.prompts[prompt.identifier];
         if (selectedIdentifier === prompt.identifier) {
             selectedIdentifier = prompts[Math.min(index, prompts.length - 1)]?.identifier ?? null;
             draftIdentifier = null;
@@ -811,21 +951,21 @@ function openEditor(entry) {
     function reorderPrompt(identifier, targetIdentifier, afterTarget) {
         if (!manageMode || !identifier || !targetIdentifier || identifier === targetIdentifier) return;
         commitDraftToPrompts();
-        const from = prompts.findIndex(item => item?.identifier === identifier);
-        if (from < 0) return;
-        const [moved] = prompts.splice(from, 1);
-        let to = prompts.findIndex(item => item?.identifier === targetIdentifier);
-        if (to < 0) {
-            prompts.splice(from, 0, moved);
-            return;
-        }
-        if (afterTarget) to++;
-        prompts.splice(to, 0, moved);
-        const rank = new Map(prompts.map((item, index) => [item?.identifier, index]));
+        if (!prompts.some(prompt => prompt.identifier === identifier) || !prompts.some(prompt => prompt.identifier === targetIdentifier)) return;
+        // Move only this reference in each order list, preserving every other
+        // prompt's relative position; prompts is the definition catalogue.
         for (const group of orderGroups) {
-            group.order = (group.order ?? []).map((item, index) => ({ item, index }))
-                .sort((a, b) => (rank.get(a.item.identifier) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.item.identifier) ?? Number.MAX_SAFE_INTEGER) || a.index - b.index)
-                .map(value => value.item);
+            const order = group.order ?? [];
+            const from = order.findIndex(item => item.identifier === identifier);
+            if (from < 0 || !order.some(item => item.identifier === targetIdentifier)) continue;
+            const [moved] = order.splice(from, 1);
+            const to = order.findIndex(item => item.identifier === targetIdentifier);
+            order.splice(to + (afterTarget ? 1 : 0), 0, moved);
+        }
+        if (promptGroups) {
+            const groupId = getPromptGroup(targetIdentifier)?.id;
+            if (groupId) promptGroups.prompts[identifier] = { groupId };
+            else delete promptGroups.prompts[identifier];
         }
         draftIdentifier = null;
         draft = null;
@@ -911,6 +1051,7 @@ function openEditor(entry) {
             dirty = false;
         }
         const editablePrompt = selectedPrompt();
+        const group = getPromptGroup(prompt.identifier);
 
         const titleRow = document.createElement('div');
         titleRow.className = 'ps-prompt-detail-title';
@@ -966,6 +1107,12 @@ function openEditor(entry) {
         enabledLabel.className = 'ps-entry-enabled';
         enabledLabel.append(enabled, document.createTextNode('启用此条目'));
         form.append(enabledLabel);
+        if (group) {
+            const groupHint = document.createElement('p');
+            groupHint.className = 'ps-editor-hint';
+            groupHint.textContent = `所属分组：${group.name}${group.enabled === false ? ' · 已停用，开启柏宝箱预设分组时，即使条目开关开启也不会生效' : ''}。整组开关可在列表中调整。`;
+            form.append(groupHint);
+        }
 
         if (editablePrompt.marker) {
             const note = document.createElement('p');
@@ -1023,6 +1170,7 @@ function openEditor(entry) {
                     current.prompts[index] = updatedPrompt;
                 }
                 for (const [identifier, enabled] of enabledOverrides) setEnabledInValue(current, identifier, enabled);
+                if (!equal(promptGroups, originalPromptGroups)) writePromptGroups(current, promptGroups);
                 target.value = current;
                 await persist(data, characterId);
                 entry.value = current;
@@ -1032,6 +1180,9 @@ function openEditor(entry) {
                 originalPrompts.splice(0, originalPrompts.length, ...clone(prompts));
                 originalOrderGroups.splice(0, originalOrderGroups.length, ...clone(orderGroups));
                 enabledOverrides.clear();
+                promptGroups = readPromptGroups(current);
+                originalPromptGroups = clone(promptGroups);
+                promptGroupById = new Map((promptGroups?.groups ?? []).map(group => [group.id, group]));
                 draft = savedPrompt ? clone(savedPrompt) : null;
                 draftIdentifier = savedPrompt?.identifier ?? null;
                 draftBaseline = savedPrompt ? clone(savedPrompt) : null;
@@ -1052,7 +1203,7 @@ function openConflictResolver(entry, latest, merged, conflicts) {
     const characterId = activeCharacterId();
     const { body, footer, close } = createDialog(
         `处理「${entry.name}」的 ${conflicts.length} 项冲突`,
-        '未冲突的修改会自动合并。请逐项选择保留角色卡值、采用酒馆最新版、删除字段或填写自定义 JSON；未选择的冲突不会完成同步。',
+        '同一项设置在角色副本和原预设两边都改过，结果不同。高亮显示相对上次同步变化的部分，请逐项选择保留哪一边。未冲突的修改会自动合并。',
     );
     const controls = [];
 
@@ -1060,20 +1211,28 @@ function openConflictResolver(entry, latest, merged, conflicts) {
         const row = document.createElement('article');
         row.className = 'ps-conflict';
         const path = document.createElement('h4');
-        path.textContent = conflict.path.map(part => {
-            if (part === '$order') return '条目顺序';
+        path.textContent = conflict.path.map((part, index) => {
+            if (conflict.path.includes('presetPromptGroups') && ['extensions', 'baibaiToolkit', 'groups'].includes(part) && index < conflict.path.length - 1) return '';
+            if (part === 'presetPromptGroups') return '柏宝箱分组';
+            if (part === '$order') return '排列顺序';
             if (part.startsWith('@')) {
-                const prompt = entry.value.prompts?.find(item => item?.identifier === part.slice(1));
-                return `条目「${prompt?.name || part.slice(1)}」`;
+                return `条目「${conflictItemName(part, entry, latest)}」`;
             }
             if (part.startsWith('#')) return `排序组 ${part.slice(1)}`;
-            return part;
-        }).join(' · ') || '（根对象）';
-        const compare = document.createElement('pre');
-        compare.textContent = `同步基线：\n${formatValue(conflict.base)}\n\n角色卡：\n${formatValue(conflict.local)}\n\n酒馆最新版：\n${formatValue(conflict.latest)}`;
+            if (part.startsWith('!')) {
+                return `分组「${conflictItemName(part, entry, latest)}」`;
+            }
+            if (index > 0 && conflict.path[index - 1] === 'prompts') return `条目「${conflictItemName(`@${part}`, entry, latest)}」`;
+            return CONFLICT_LABELS[part] ?? part;
+        }).filter(Boolean).join(' · ') || '（根对象）';
+        const key = conflict.path.at(-1);
+        const baselineText = conflictValueText(conflict.base, entry, latest, key);
+        const compare = document.createElement('div');
+        compare.className = 'ps-conflict-compare';
         const select = document.createElement('select');
         select.className = 'text_pole';
-        const choices = [['', '请选择处理方式'], ['local', '保留角色卡值'], ['latest', '采用酒馆最新版'], ['custom', '填写自定义值']];
+        select.setAttribute('aria-label', `${path.textContent}的处理方式`);
+        const choices = [['', '请选择处理方式'], ['local', '保留角色副本'], ['latest', '采用原预设最新版'], ['custom', '手动修改结果']];
         if (conflict.path.at(-1) !== '$order') choices.push(['delete', '删除该字段']);
         for (const [value, label] of choices) {
             const option = document.createElement('option');
@@ -1085,12 +1244,48 @@ function openConflictResolver(entry, latest, merged, conflicts) {
             }
             select.append(option);
         }
-        const custom = document.createElement('textarea');
-        custom.className = 'ps-conflict-custom';
+        for (const [value, title, data] of [['local', '角色副本 · 你的修改', conflict.local], ['latest', '原预设 · 最新修改', conflict.latest]]) {
+            const card = document.createElement('section');
+            card.className = 'ps-conflict-value';
+            card.dataset.choice = value;
+            const heading = document.createElement('strong');
+            heading.textContent = title;
+            const text = document.createElement('pre');
+            appendChangedText(text, conflictValueText(data, entry, latest, key), baselineText);
+            const choose = makeButton(value === 'local' ? '保留这一边' : '采用这一边', () => {
+                select.value = value;
+                select.dispatchEvent(new Event('change'));
+            });
+            card.append(heading, text, choose);
+            compare.append(card);
+        }
+        const baseline = document.createElement('details');
+        baseline.className = 'ps-conflict-baseline';
+        const summary = document.createElement('summary');
+        summary.textContent = '查看上次同步的值';
+        const baselineValue = document.createElement('pre');
+        baselineValue.textContent = baselineText;
+        baseline.append(summary, baselineValue);
+        const template = conflict.local === MISSING ? conflict.latest : conflict.local;
+        const valueType = typeof template;
+        const custom = document.createElement(valueType === 'boolean' ? 'select' : valueType === 'number' ? 'input' : 'textarea');
+        custom.className = `ps-conflict-custom${valueType === 'string' ? ' ps-conflict-text' : ''}`;
+        custom.dataset.valueType = ['string', 'number', 'boolean'].includes(valueType) ? valueType : 'json';
+        custom.setAttribute('aria-label', `${path.textContent}的自定义结果`);
+        if (valueType === 'number') { custom.type = 'number'; custom.step = 'any'; }
+        if (valueType === 'boolean') {
+            for (const [value, name] of [['true', '开启'], ['false', '关闭']]) {
+                const option = document.createElement('option');
+                option.value = value; option.textContent = name; custom.append(option);
+            }
+        }
         custom.hidden = true;
-        custom.value = conflict.local === MISSING ? 'null' : JSON.stringify(conflict.local, null, 2);
-        select.addEventListener('change', () => { custom.hidden = select.value !== 'custom'; });
-        row.append(path, compare, select, custom);
+        custom.value = custom.dataset.valueType === 'json' ? JSON.stringify(template === MISSING ? null : template, null, 2) : String(template);
+        select.addEventListener('change', () => {
+            custom.hidden = select.value !== 'custom';
+            for (const card of compare.children) card.classList.toggle('ps-conflict-chosen', card.dataset.choice === select.value);
+        });
+        row.append(path, compare, baseline, select, custom);
         body.append(row);
         controls.push({ conflict, select, custom });
     }
@@ -1106,7 +1301,12 @@ function openConflictResolver(entry, latest, merged, conflicts) {
                     if (select.value === 'local') value = conflict.local;
                     else if (select.value === 'latest') value = conflict.latest;
                     else if (select.value === 'delete') value = MISSING;
-                    else value = JSON.parse(custom.value);
+                    else if (custom.dataset.valueType === 'string') value = custom.value;
+                    else if (custom.dataset.valueType === 'boolean') value = custom.value === 'true';
+                    else if (custom.dataset.valueType === 'number') {
+                        value = Number(custom.value);
+                        if (!custom.value.trim() || !Number.isFinite(value)) throw new Error('自定义数值无效');
+                    } else value = JSON.parse(custom.value);
                     resolved = setAtPath(resolved, conflict.path, value);
                 }
                 const data = readCardData(characterId);
@@ -1125,7 +1325,64 @@ function openConflictResolver(entry, latest, merged, conflicts) {
     );
 }
 
+function pendingRuntimePromptGroups(entry, data) {
+    if (data.activeName !== entry.name || getManager()?.getSelectedPresetName?.() !== sourcePresetName(entry)) return null;
+    if (typeof chatCompletion.getChatCompletionPreset !== 'function') return null;
+    const current = chatCompletion.getChatCompletionPreset();
+    // Import group metadata only for prompts that exist in this copy.
+    const runtime = readPromptGroups({ ...current, prompts: entry.value.prompts });
+    const saved = readPromptGroups(entry.value);
+    const meaningful = state => state ? {
+        groups: state.groups.map(({ collapsed, ...group }) => group),
+        prompts: state.prompts,
+    } : { groups: [], prompts: {} };
+    return runtime && !equal(meaningful(runtime), meaningful(saved)) ? runtime : null;
+}
+
+function choosePendingPromptGroups(entry, state) {
+    return new Promise(resolve => {
+        const { backdrop, body, footer, close } = createDialog(
+            '检测到未保存的柏宝箱分组',
+            `当前柏宝箱里的分组与「${entry.name}」副本不同。可单独保存这些分组到当前角色副本，或继续检查酒馆已保存的原预设。保存分组不会自动保存提示词正文。`,
+        );
+        const names = document.createElement('p');
+        names.className = 'ps-editor-hint';
+        names.textContent = `当前分组：${state.groups.map(group => group.name).join('、') || '无分组'}`;
+        body.append(names);
+        const finish = choice => { close(); resolve(choice); };
+        backdrop.addEventListener('click', event => {
+            if (event.target === backdrop) finish('cancel');
+        });
+        footer.append(
+            makeButton('取消', () => finish('cancel')),
+            makeButton('仅同步原预设', () => finish('source')),
+            makeButton('保存分组到副本', () => finish('copy'), 'ps-primary'),
+        );
+    });
+}
+
 async function syncPreset(entry) {
+    const characterId = activeCharacterId();
+    const initialData = readCardData(characterId);
+    const initialEntry = findBoundPreset(initialData, entry.name);
+    if (!initialEntry) return;
+    entry = initialEntry;
+    const pendingGroups = pendingRuntimePromptGroups(initialEntry, initialData);
+    if (pendingGroups) {
+        const choice = await choosePendingPromptGroups(initialEntry, pendingGroups);
+        if (choice === 'cancel' || activeCharacterId() !== characterId) return;
+        if (choice === 'copy') {
+            const data = readCardData(characterId);
+            const target = findBoundPreset(data, entry.name);
+            if (!target) return;
+            const value = clone(target.value);
+            writePromptGroups(value, pendingGroups);
+            target.value = value;
+            await persist(data, characterId);
+            toastr.success('已将柏宝箱分组保存到当前角色副本');
+            return;
+        }
+    }
     const latest = getLatestPreset(sourcePresetName(entry));
     if (!latest) {
         toastr.warning(`酒馆中找不到原预设「${sourcePresetName(entry)}」；请确认预设未被删除或改名`);
@@ -1144,7 +1401,6 @@ async function syncPreset(entry) {
         return;
     }
 
-    const characterId = activeCharacterId();
     const data = readCardData(characterId);
     const target = findBoundPreset(data, entry.name);
     if (!target) return;
@@ -1412,7 +1668,7 @@ function render() {
     const launcher = root.querySelector('.ps-launcher');
     const image = launcher.querySelector('.ps-launcher-image');
     const label = launcher.querySelector('.ps-launcher-label');
-    const customImage = getUiSettings().launcherImage;
+    const customImage = uiSettings.launcherImage;
     const defaultImage = new URL('/favicon.ico', window.location.origin).href;
     const displayedImage = customImage || defaultImage;
     image.onload = () => {
@@ -1437,7 +1693,7 @@ function render() {
     const list = panel.querySelector('.ps-list');
     const message = panel.querySelector('.ps-message');
     const addSelect = panel.querySelector('.ps-add-select');
-    const quickMode = getUiSettings().viewMode === 'quick';
+    const quickMode = uiSettings.viewMode === 'quick';
     panel.classList.toggle('ps-quick-mode', quickMode);
     panel.querySelector('.ps-bind').hidden = quickMode;
     presetPager.element.hidden = quickMode && data.presets.length <= PRESETS_PER_PAGE;
@@ -1667,7 +1923,8 @@ async function onChatChanged() {
 
 export function init() {
     root = createUi();
-    eventSource.on(event_types.OAI_PRESET_CHANGED_BEFORE, ({ preset, presetName, settingsToUpdate }) => {
+    // Inject the character copy before BaiBai's early render and group cache.
+    eventSource.makeFirst(event_types.OAI_PRESET_CHANGED_BEFORE, ({ preset, presetName, settingsToUpdate }) => {
         const currentId = activeCharacterId();
         const characterId = applyingCharacterId === currentId ? applyingCharacterId : currentId;
         if (characterId === null || characterId === undefined || !isObject(preset)) return;
