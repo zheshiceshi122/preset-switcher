@@ -14,6 +14,245 @@
     width: auto;
 }
 
+.ps-launcher-size-controls {
+    align-items: center;
+    display: flex;
+    gap: .5rem;
+    min-width: 0;
+}
+
+.ps-launcher-size-controls input[type="range"] {
+    flex: 1 1 0;
+    min-width: 0;
+    width: 100%;
+}
+
+.ps-launcher-size-number {
+    flex: 0 0 4.5rem;
+    margin: 0;
+    width: 4.5rem;
+}
+
+.ps-launcher-size-preview {
+    align-items: center;
+    display: flex;
+    justify-content: center;
+    min-height: 88px;
+}
+
+.ps-launcher-size-face {
+    align-items: center;
+    background: var(--SmartThemeQuoteColor, #6955c7);
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, .16));
+    border-radius: 50%;
+    box-sizing: border-box;
+    color: #fff;
+    display: flex;
+    justify-content: center;
+    overflow: hidden;
+    position: relative;
+}
+
+.ps-launcher-size-face img {
+    height: 100%;
+    inset: 0;
+    object-fit: cover;
+    position: absolute;
+    width: 100%;
+}
+
+.ps-launcher-size-reset {
+    align-self: flex-start;
+    margin: 0 0 .75rem;
+    width: auto;
+}
+
+.ps-dialog.ps-entry-choice-dialog,
+.ps-dialog.ps-draw-dialog,
+.ps-dialog.ps-draw-settings-dialog {
+    box-sizing: border-box;
+    max-width: 30rem;
+}
+
+.ps-entry-choices {
+    display: grid;
+    gap: .8rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin: .5rem 0;
+}
+
+.ps-entry-choices .ps-entry-choice {
+    align-items: flex-start;
+    background: var(--SmartThemeChatTintColor, rgba(255, 255, 255, .035));
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, .16));
+    border-radius: .75rem;
+    color: var(--SmartThemeBodyColor, #eee);
+    display: flex;
+    flex-direction: column;
+    gap: .6rem;
+    margin: 0;
+    min-height: 10rem;
+    min-width: 0;
+    padding: 1rem;
+    text-align: left;
+    white-space: normal;
+    width: 100%;
+}
+
+.ps-entry-choice:hover:not(:disabled),
+.ps-entry-choice:focus-visible {
+    border-color: var(--SmartThemeQuoteColor, #b88b26);
+}
+
+.ps-entry-choice:disabled {
+    opacity: .5;
+}
+
+.ps-entry-choice > span:last-child {
+    color: var(--SmartThemeEmColor, #aaa);
+    font-size: .8rem;
+    line-height: 1.5;
+}
+
+.ps-entry-choice-icon {
+    color: var(--SmartThemeQuoteColor, #b88b26);
+    display: inline-flex;
+    height: 2.25rem;
+    width: 2.25rem;
+}
+
+.ps-entry-choice-icon svg {
+    height: 100%;
+    width: 100%;
+}
+
+.ps-draw-settings-button {
+    align-items: center;
+    background: transparent;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, .2));
+    border-radius: .5rem;
+    color: var(--SmartThemeBodyColor, #eee);
+    display: inline-flex;
+    flex: 0 0 2.25rem;
+    height: 2.25rem;
+    justify-content: center;
+    margin: 0;
+    padding: .4rem;
+    width: 2.25rem;
+}
+
+.ps-draw-settings-button svg {
+    height: 1.4rem;
+    width: 1.4rem;
+}
+
+.ps-draw-toolbar {
+    display: flex;
+    justify-content: center;
+    margin: .3rem 0 .9rem;
+}
+
+.ps-draw-scope {
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, .16));
+    border-radius: 2rem;
+    color: var(--SmartThemeEmColor, #aaa);
+    font-size: .8rem;
+    padding: .3rem .7rem;
+}
+
+.ps-draw-stage {
+    display: flex;
+    justify-content: center;
+    padding: .5rem 0 1rem;
+    perspective: 800px;
+}
+
+.ps-draw-card {
+    aspect-ratio: 3 / 4;
+    background: var(--SmartThemeChatTintColor, rgba(255, 255, 255, .04));
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, .2));
+    border-radius: 1rem;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .2);
+    max-height: 36dvh;
+    overflow: hidden;
+    position: relative;
+    width: min(12rem, 45vw, 27dvh);
+}
+
+.ps-draw-card-result {
+    border-color: var(--SmartThemeQuoteColor, #b88b26);
+}
+
+.ps-draw-placeholder {
+    align-items: center;
+    color: var(--SmartThemeQuoteColor, #b88b26);
+    display: flex;
+    height: 100%;
+    justify-content: center;
+    width: 100%;
+}
+
+.ps-draw-placeholder svg {
+    width: 4rem;
+}
+
+.ps-draw-avatar {
+    height: 100%;
+    inset: 0;
+    object-fit: cover;
+    position: absolute;
+    width: 100%;
+}
+
+.ps-draw-name {
+    font-size: 1.15rem;
+    margin: 0 0 .45rem;
+    overflow-wrap: anywhere;
+    text-align: center;
+}
+
+.ps-draw-status {
+    color: var(--SmartThemeEmColor, #aaa);
+    font-size: .85rem;
+    line-height: 1.6;
+    margin: 0 0 .5rem;
+    min-height: 2.7em;
+    text-align: center;
+}
+
+.ps-draw-dialog .ps-dialog-footer {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ps-draw-dialog .ps-dialog-footer button {
+    margin: 0;
+    width: 100%;
+}
+
+.ps-draw-dialog .ps-dialog-footer:not(.ps-draw-has-result) .ps-draw-button,
+.ps-draw-dialog .ps-draw-back {
+    grid-column: 1 / -1;
+}
+
+.ps-draw-dialog .ps-draw-back {
+    background: transparent;
+    border: 0;
+    color: var(--SmartThemeEmColor, #aaa);
+    font-size: .8rem;
+}
+
+@media (max-width: 380px) {
+    .ps-entry-choices {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .ps-entry-choices .ps-entry-choice {
+        min-height: 0;
+        padding: .8rem;
+    }
+}
+
 #preset-switcher-root {
     --ps-launcher-size: 2rem;
     --ps-launcher-hit-size: 3rem;

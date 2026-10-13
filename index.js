@@ -1,9 +1,11 @@
 import { characters, eventSource, event_types, main_api, saveSettingsDebounced, this_chid } from '../../../../script.js';
+import * as tavernHost from '../../../../script.js';
 import { selected_group } from '../../../group-chats.js';
 import { extension_settings, writeExtensionField } from '../../../extensions.js';
 import { getPresetManager } from '../../../preset-manager.js';
 import * as chatCompletion from '../../../openai.js';
 import { comparableExtensions, readPromptGroups, writePromptGroups } from './baibai-groups.js';
+import { createCharacterDraw } from './character-draw.js';
 
 const DATA_KEY = 'preset_switcher';
 const UI_SETTINGS_KEY = 'preset_switcher_ui';
@@ -20,6 +22,8 @@ let presetPage = 1;
 let presetPager;
 let renderedCharacterId = null;
 let launcherVisibilityControl;
+let characterDrawControl;
+let characterDraw;
 
 const PRESETS_PER_PAGE = 8;
 const PROMPTS_PER_PAGE = 15;
@@ -76,6 +80,11 @@ function getUiSettings() {
         topRatio: Number.isFinite(value.topRatio) ? Math.min(1, Math.max(0, value.topRatio)) : 0.68,
         launcherImage: typeof value.launcherImage === 'string' ? value.launcherImage : '',
         launcherVisible: value.launcherVisible !== false,
+        launcherSize: Number.isInteger(value.launcherSize) && value.launcherSize >= 24 && value.launcherSize <= 80 ? value.launcherSize : 32,
+        characterDrawEnabled: value.characterDrawEnabled === true,
+        drawScope: value.drawScope === 'favorites' ? 'favorites' : 'all',
+        drawExcludeCurrent: value.drawExcludeCurrent !== false,
+        drawNoRepeat: value.drawNoRepeat !== false,
         editorCollapsedGroups: isObject(value.editorCollapsedGroups) ? value.editorCollapsedGroups : {},
         customPromptPageSize: value.customPromptPageSize === true,
         promptPageSize: Number.isInteger(value.promptPageSize) && value.promptPageSize >= 1 && value.promptPageSize <= 500 ? value.promptPageSize : PROMPTS_PER_PAGE,
@@ -96,9 +105,12 @@ function getPromptPageSize(settings = getUiSettings()) {
 
 function applyLauncherPosition(element) {
     const settings = getUiSettings();
+    const hitSize = Math.max(48, settings.launcherSize + 16);
+    element.style.setProperty('--ps-launcher-size', `${settings.launcherSize}px`);
+    element.style.setProperty('--ps-launcher-hit-size', `${hitSize}px`);
     const launcher = element.querySelector('.ps-launcher');
-    const width = launcher?.offsetWidth || 48;
-    const height = launcher?.offsetHeight || 48;
+    const width = launcher?.offsetWidth || hitSize;
+    const height = launcher?.offsetHeight || hitSize;
     const maxTop = Math.max(8, window.innerHeight - height - 8);
     const top = Math.min(maxTop, Math.max(8, settings.topRatio * maxTop));
     const maxLeft = Math.max(0, window.innerWidth - width);
@@ -1603,7 +1615,7 @@ function editPresetNote(entry) {
 
 function openAppearanceDialog(setLauncherImageFromFile) {
     const settings = getUiSettings();
-    const { body, footer, close } = createDialog('预设切换器设置', '设置悬浮球图标、列表显示模式，以及切换预设时是否保留当前 API 设置。');
+    const { body, footer, close } = createDialog('预设切换器设置', '设置悬浮球大小、图标、列表显示模式，以及切换预设时是否保留当前 API 设置。');
     const showLauncher = document.createElement('input');
     showLauncher.type = 'checkbox';
     showLauncher.checked = settings.launcherVisible;
@@ -1646,7 +1658,69 @@ function openAppearanceDialog(setLauncherImageFromFile) {
         return wrapper;
     };
 
+    const sizeControls = document.createElement('div');
+    sizeControls.className = 'ps-launcher-size-controls';
+    const sizeRange = document.createElement('input');
+    sizeRange.type = 'range';
+    sizeRange.min = '24';
+    sizeRange.max = '80';
+    sizeRange.step = '1';
+    sizeRange.value = String(settings.launcherSize);
+    sizeRange.setAttribute('aria-label', '悬浮球直径');
+    const sizeNumber = document.createElement('input');
+    sizeNumber.className = 'text_pole ps-launcher-size-number';
+    sizeNumber.type = 'number';
+    sizeNumber.min = '24';
+    sizeNumber.max = '80';
+    sizeNumber.step = '1';
+    sizeNumber.value = String(settings.launcherSize);
+    sizeNumber.setAttribute('aria-label', '悬浮球直径，单位像素');
+    const sizeUnit = document.createElement('span');
+    sizeUnit.textContent = 'px';
+    sizeControls.append(sizeRange, sizeNumber, sizeUnit);
+    const sizePreview = document.createElement('div');
+    sizePreview.className = 'ps-launcher-size-preview';
+    sizePreview.setAttribute('aria-hidden', 'true');
+    const previewFace = document.createElement('span');
+    previewFace.className = 'ps-launcher-size-face';
+    previewFace.textContent = '预';
+    const previewImage = document.createElement('img');
+    previewImage.alt = '';
+    previewImage.src = settings.launcherImage || new URL('/favicon.ico', window.location.origin).href;
+    previewImage.addEventListener('error', () => { previewImage.hidden = true; });
+    previewFace.append(previewImage);
+    sizePreview.append(previewFace);
+    const sizeHint = document.createElement('p');
+    sizeHint.className = 'ps-editor-hint';
+    const updateSizePreview = size => {
+        sizeRange.value = String(size);
+        previewFace.style.width = `${size}px`;
+        previewFace.style.height = `${size}px`;
+        sizeHint.textContent = `球面直径 ${size} px，触控区域 ${Math.max(48, size + 16)} × ${Math.max(48, size + 16)} px。保存后生效，贴边时左右均隐藏半个球面。`;
+    };
+    const readSize = () => {
+        const size = Number(sizeNumber.value);
+        return Number.isInteger(size) && size >= 24 && size <= 80 ? size : null;
+    };
+    sizeRange.addEventListener('input', () => {
+        sizeNumber.value = sizeRange.value;
+        sizeNumber.setCustomValidity('');
+        updateSizePreview(Number(sizeRange.value));
+    });
+    sizeNumber.addEventListener('input', () => {
+        sizeNumber.setCustomValidity('');
+        const size = readSize();
+        if (size !== null) updateSizePreview(size);
+    });
+    const resetSize = makeButton('恢复 32 px', () => {
+        sizeNumber.value = '32';
+        sizeNumber.setCustomValidity('');
+        updateSizePreview(32);
+    }, 'ps-launcher-size-reset');
+    updateSizePreview(settings.launcherSize);
     body.append(
+        settingsField('悬浮球大小（24–80 px）', sizeControls),
+        sizePreview, sizeHint, resetSize,
         settingsField('图标图片 URL', imageUrl),
         settingsField('或选择本地图片', imageFile),
     );
@@ -1663,24 +1737,41 @@ function openAppearanceDialog(setLauncherImageFromFile) {
     body.append(preserveLabel, preserveHint);
 
     const saveOptions = async imageSource => {
+        const size = readSize();
+        if (size === null) {
+            sizeNumber.setCustomValidity('请输入 24 到 80 的整数');
+            sizeNumber.reportValidity();
+            throw new Error('悬浮球直径须为 24 到 80 的整数');
+        }
         saveUiSettings({
             launcherImage: imageSource,
             launcherVisible: showLauncher.checked,
+            launcherSize: size,
             viewMode: mode.value === 'quick' ? 'quick' : 'full',
             preserveApiSettings: preserve.checked,
         });
         if (!showLauncher.checked) closeSwitcherPanel();
         render();
+        applyLauncherPosition(root);
     };
     footer.append(
         makeButton('取消', close),
         makeButton('恢复默认图标', async () => {
-            await saveOptions('');
-            close();
-            toastr.success('已恢复默认悬浮球图标');
+            try {
+                await saveOptions('');
+                close();
+                toastr.success('已恢复默认悬浮球图标');
+            } catch (error) {
+                toastr.error(error.message);
+            }
         }),
         makeButton('保存设置', async () => {
             try {
+                if (readSize() === null) {
+                    sizeNumber.setCustomValidity('请输入 24 到 80 的整数');
+                    sizeNumber.reportValidity();
+                    throw new Error('悬浮球直径须为 24 到 80 的整数');
+                }
                 const file = imageFile.files?.[0];
                 let imageSource = getUiSettings().launcherImage;
                 if (file) {
@@ -1713,12 +1804,20 @@ function createExtensionSettings(openPanel, openSettings) {
     const settings = document.createElement('div');
     settings.id = 'preset-switcher-settings';
     settings.className = 'extension_container';
-    settings.innerHTML = '<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header"><b>预设切换器</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content"><label class="checkbox_label"><input id="preset-switcher-launcher-visible" type="checkbox">显示悬浮球</label><div class="ps-settings-actions"></div></div></div>';
-    launcherVisibilityControl = settings.querySelector('input');
+    settings.innerHTML = '<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header"><b>预设切换器</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content"><label class="checkbox_label"><input id="preset-switcher-launcher-visible" type="checkbox">显示悬浮球</label><label class="checkbox_label"><input id="preset-switcher-draw-enabled" type="checkbox">开启角色抽卡</label><div class="ps-settings-actions"></div></div></div>';
+    launcherVisibilityControl = settings.querySelector('#preset-switcher-launcher-visible');
     launcherVisibilityControl.checked = getUiSettings().launcherVisible;
     launcherVisibilityControl.addEventListener('change', () => {
         saveUiSettings({ launcherVisible: launcherVisibilityControl.checked });
         if (!launcherVisibilityControl.checked) closeSwitcherPanel();
+        render();
+    });
+    characterDrawControl = settings.querySelector('#preset-switcher-draw-enabled');
+    characterDrawControl.checked = getUiSettings().characterDrawEnabled;
+    characterDrawControl.addEventListener('change', () => {
+        saveUiSettings({ characterDrawEnabled: characterDrawControl.checked });
+        characterDraw?.close();
+        closeSwitcherPanel();
         render();
     });
     settings.querySelector('.ps-settings-actions').append(makeButton('管理角色预设', openPanel), makeButton('设置', openSettings));
@@ -1738,11 +1837,12 @@ function render() {
     if (!root) return;
     const uiSettings = getUiSettings();
     if (launcherVisibilityControl) launcherVisibilityControl.checked = uiSettings.launcherVisible;
+    if (characterDrawControl) characterDrawControl.checked = uiSettings.characterDrawEnabled;
     const characterId = activeCharacterId();
     const character = characterId === null || characterId === undefined ? null : characters?.[characterId];
-    root.hidden = !character || main_api !== 'openai' || (!uiSettings.launcherVisible && root.querySelector('.ps-panel').hidden);
+    const canUsePresets = Boolean(character) && main_api === 'openai';
+    root.hidden = (!canUsePresets && !uiSettings.characterDrawEnabled) || (!uiSettings.launcherVisible && root.querySelector('.ps-panel').hidden);
     root.querySelector('.ps-launcher').hidden = !uiSettings.launcherVisible;
-    if (!character) return;
 
     if (renderedCharacterId !== characterId) {
         renderedCharacterId = characterId;
@@ -1750,7 +1850,7 @@ function render() {
     }
 
     const data = readCardData(characterId);
-    const isOpenAi = main_api === 'openai' && Boolean(getManager());
+    const isOpenAi = canUsePresets && Boolean(getManager());
     const activeEntry = findBoundPreset(data, data.activeName);
     const launcher = root.querySelector('.ps-launcher');
     const image = launcher.querySelector('.ps-launcher-image');
@@ -1773,10 +1873,16 @@ function render() {
         image.src = displayedImage;
     }
     label.textContent = activeEntry?.name?.slice(0, 1) || '预';
-    launcher.title = activeEntry ? `预设切换器：${activeEntry.name}` : '预设切换器';
-    launcher.disabled = !isOpenAi;
+    launcher.title = uiSettings.characterDrawEnabled ? '选择预设切换器或角色抽卡' : activeEntry ? `预设切换器：${activeEntry.name}` : '预设切换器';
+    launcher.setAttribute('aria-label', uiSettings.characterDrawEnabled ? '选择预设切换器或角色抽卡' : '打开预设切换器');
+    launcher.disabled = !uiSettings.characterDrawEnabled && !canUsePresets;
 
     const panel = root.querySelector('.ps-panel');
+    if (!canUsePresets) {
+        panel.hidden = true;
+        launcher.setAttribute('aria-expanded', 'false');
+        return;
+    }
     const list = panel.querySelector('.ps-list');
     const message = panel.querySelector('.ps-message');
     const addSelect = panel.querySelector('.ps-add-select');
@@ -1786,7 +1892,7 @@ function render() {
     presetPager.element.hidden = quickMode && data.presets.length <= PRESETS_PER_PAGE;
     const previouslySelectedPreset = addSelect.value;
     list.replaceChildren();
-    message.textContent = isOpenAi ? `当前角色：${character.name || '未命名角色'}` : '请先切换到 OpenAI/聊天补全 API。';
+    message.textContent = canUsePresets ? `当前角色：${character.name || '未命名角色'}` : '请先打开角色聊天并切换到 OpenAI/聊天补全 API。';
 
     const availablePresetNames = presetNames();
     const availablePresets = new Set(availablePresetNames);
@@ -1886,6 +1992,22 @@ function createUi() {
     applyLauncherPosition(element);
     const launcher = element.querySelector('.ps-launcher');
     const panel = element.querySelector('.ps-panel');
+    const openPresetPanel = () => {
+        if (activeCharacterId() === null || activeCharacterId() === undefined || main_api !== 'openai') {
+            toastr.info('请先打开角色卡聊天并切换到 OpenAI / 聊天补全');
+            return;
+        }
+        panel.hidden = false;
+        launcher.setAttribute('aria-expanded', 'true');
+        const extensionDrawer = document.getElementById('rm_extensions_block');
+        if (extensionDrawer?.classList.contains('openDrawer')) extensionDrawer.closest('.drawer')?.querySelector('.drawer-toggle')?.click();
+        render();
+    };
+    characterDraw = createCharacterDraw({
+        host: tavernHost, getSettings: getUiSettings, saveSettings: saveUiSettings, createDialog, makeButton,
+        openPresets: openPresetPanel,
+        canOpenPresets: () => activeCharacterId() !== null && activeCharacterId() !== undefined && main_api === 'openai',
+    });
     let pointerStart = null;
     let dragged = false;
     let suppressClick = false;
@@ -1967,6 +2089,12 @@ function createUi() {
             suppressClick = false;
             return;
         }
+        if (getUiSettings().characterDrawEnabled) {
+            closeSwitcherPanel();
+            characterDraw.toggleChoice();
+            render();
+            return;
+        }
         panel.hidden = !panel.hidden;
         launcher.setAttribute('aria-expanded', String(!panel.hidden));
         render();
@@ -1983,19 +2111,7 @@ function createUi() {
         const select = element.querySelector('.ps-add-select');
         if (select.value) await bindPreset(select.value);
     });
-    createExtensionSettings(() => {
-        if (activeCharacterId() === null || activeCharacterId() === undefined || main_api !== 'openai') {
-            toastr.info('请先打开角色卡聊天并切换到 OpenAI / 聊天补全');
-            return;
-        }
-        panel.hidden = false;
-        launcher.setAttribute('aria-expanded', 'true');
-        const extensionDrawer = document.getElementById('rm_extensions_block');
-        if (extensionDrawer?.classList.contains('openDrawer')) {
-            extensionDrawer.closest('.drawer')?.querySelector('.drawer-toggle')?.click();
-        }
-        render();
-    }, () => openAppearanceDialog(setLauncherImageFromFile));
+    createExtensionSettings(openPresetPanel, () => openAppearanceDialog(setLauncherImageFromFile));
     return element;
 }
 
