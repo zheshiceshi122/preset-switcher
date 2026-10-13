@@ -2,6 +2,7 @@ import { characters, eventSource, event_types, main_api, saveSettingsDebounced, 
 import { selected_group } from '../../../group-chats.js';
 import { extension_settings, writeExtensionField } from '../../../extensions.js';
 import { getPresetManager } from '../../../preset-manager.js';
+import * as chatCompletion from '../../../openai.js';
 
 const DATA_KEY = 'preset_switcher';
 const UI_SETTINGS_KEY = 'preset_switcher_ui';
@@ -17,6 +18,7 @@ let renderQueued = false;
 let presetPage = 1;
 let presetPager;
 let renderedCharacterId = null;
+let launcherVisibilityControl;
 
 const PRESETS_PER_PAGE = 8;
 const PROMPTS_PER_PAGE = 15;
@@ -64,7 +66,7 @@ function getManager() {
 function getUiSettings() {
     const settings = extension_settings[UI_SETTINGS_KEY];
     if (!settings || typeof settings !== 'object') {
-        extension_settings[UI_SETTINGS_KEY] = { dockSide: 'right', xRatio: 0.98, topRatio: 0.68, launcherImage: '', viewMode: 'full', preserveApiSettings: false };
+        extension_settings[UI_SETTINGS_KEY] = { dockSide: 'right', xRatio: 0.98, topRatio: 0.68, launcherImage: '', launcherVisible: true, viewMode: 'full', preserveApiSettings: false };
     }
     const value = extension_settings[UI_SETTINGS_KEY];
     return {
@@ -72,6 +74,7 @@ function getUiSettings() {
         xRatio: Number.isFinite(value.xRatio) ? Math.min(1, Math.max(0, value.xRatio)) : 0.98,
         topRatio: Number.isFinite(value.topRatio) ? Math.min(1, Math.max(0, value.topRatio)) : 0.68,
         launcherImage: typeof value.launcherImage === 'string' ? value.launcherImage : '',
+        launcherVisible: value.launcherVisible !== false,
         viewMode: value.viewMode === 'quick' ? 'quick' : 'full',
         preserveApiSettings: value.preserveApiSettings === true,
     };
@@ -85,8 +88,8 @@ function saveUiSettings(changes) {
 function applyLauncherPosition(element) {
     const settings = getUiSettings();
     const launcher = element.querySelector('.ps-launcher');
-    const width = launcher?.offsetWidth ?? 40;
-    const height = launcher?.offsetHeight ?? 40;
+    const width = launcher?.offsetWidth || 48;
+    const height = launcher?.offsetHeight || 48;
     const maxTop = Math.max(8, window.innerHeight - height - 8);
     const top = Math.min(maxTop, Math.max(8, settings.topRatio * maxTop));
     const maxLeft = Math.max(0, window.innerWidth - width);
@@ -103,6 +106,18 @@ function applyLauncherPosition(element) {
     element.classList.toggle('ps-left-docked', settings.dockSide === 'left');
     element.classList.toggle('ps-right-docked', settings.dockSide === 'right');
     element.classList.toggle('ps-panel-below', top < window.innerHeight * .42);
+    keepPanelInViewport(element);
+}
+
+function keepPanelInViewport(element) {
+    const panel = element.querySelector('.ps-panel');
+    if (panel.hidden || element.hidden) return;
+    const rect = panel.getBoundingClientRect();
+    const previousShift = Number.parseFloat(element.style.getPropertyValue('--ps-panel-shift')) || 0;
+    const left = rect.left - previousShift;
+    const right = rect.right - previousShift;
+    const shift = left < 12 ? 12 - left : right > window.innerWidth - 12 ? window.innerWidth - 12 - right : 0;
+    if (shift !== previousShift) element.style.setProperty('--ps-panel-shift', `${shift}px`);
 }
 
 function activeCharacterId() {
@@ -200,11 +215,25 @@ function sourcePresetName(entry) {
     return entry.sourceName || entry.name;
 }
 
+function isCopyAlreadyApplied(entry) {
+    if (getManager()?.getSelectedPresetName?.() !== sourcePresetName(entry)) return false;
+    if (typeof chatCompletion.getChatCompletionPreset !== 'function' || !chatCompletion.settingsToUpdate) return false;
+    const current = chatCompletion.getChatCompletionPreset();
+    const preserveApi = getUiSettings().preserveApiSettings;
+    return Object.entries(chatCompletion.settingsToUpdate).every(([key, definition]) => {
+        if (definition?.[3] && (preserveApi || !chatCompletion.oai_settings?.bind_preset_to_connection)) return true;
+        if (preserveApi && key === 'chat_completion_source') return true;
+        if (key === 'extensions') return equal(current[key] ?? {}, entry.value[key] ?? {});
+        return entry.value[key] === undefined || equal(current[key], entry.value[key]);
+    });
+}
+
 async function applyPreset(name, characterId = activeCharacterId()) {
     if (characterId === null || characterId === undefined || selected_group || main_api !== 'openai' || activeCharacterId() !== characterId) return;
     const data = readCardData(characterId);
     const entry = findBoundPreset(data, name);
     if (!entry) return;
+    if (applyingCharacterId !== null) return;
 
     const manager = getManager();
     const sourceName = sourcePresetName(entry);
@@ -214,21 +243,36 @@ async function applyPreset(name, characterId = activeCharacterId()) {
         scheduleRender();
         return;
     }
+    if (isCopyAlreadyApplied(entry)) {
+        if (data.activeName !== name) {
+            data.activeName = name;
+            await persist(data, characterId);
+        }
+        return;
+    }
 
     applyingCharacterId = characterId;
     applyingEntryName = entry.name;
     applyingPreserveApiSettings = getUiSettings().preserveApiSettings;
+    let onApplied;
+    const completed = new Promise(resolve => { onApplied = resolve; });
+    eventSource.once(event_types.OAI_PRESET_CHANGED_AFTER, onApplied);
+    scheduleRender();
     try {
         await manager.selectPreset(option);
+        // TauriTavern's selectPreset does not return the asynchronous application.
+        await completed;
         data.activeName = name;
         await persist(data, characterId);
     } catch (error) {
         console.error('[预设切换器] 应用预设失败', error);
         toastr.error(`应用预设“${name}”失败`);
     } finally {
+        eventSource.removeListener(event_types.OAI_PRESET_CHANGED_AFTER, onApplied);
         applyingCharacterId = null;
         applyingEntryName = null;
         applyingPreserveApiSettings = false;
+        scheduleRender();
     }
 }
 
@@ -441,7 +485,7 @@ function createDialog(title, description, { helpText = '', modeOptions = null } 
 
 function openEditor(entry) {
     const characterId = activeCharacterId();
-    const helpText = '搜索并选择条目后编辑。收藏会跨角色显示；保存只修改当前角色卡的这个预设副本。仅编辑模式不会改变条目结构；完整模式可新建、删除条目，并长按拖动手柄调整顺序。条目和预设列表都支持输入页码跳转。';
+    const helpText = '在列表直接勾选条目开关，可连续调整多条后统一保存；点击条目名称编辑内容。收藏会跨角色显示；保存只修改当前角色卡的这个预设副本。仅编辑模式不会改变条目结构；完整模式可新建、删除条目，并长按拖动手柄调整顺序。条目和预设列表都支持输入页码跳转。';
     const modeOptions = {
         getEnabled: () => manageMode,
         onChange: enabled => setManageMode(enabled),
@@ -464,7 +508,7 @@ function openEditor(entry) {
         }
     };
     const favorites = readFavorites();
-    let selectedIdentifier = prompts.find(prompt => prompt?.identifier)?.identifier ?? null;
+    let selectedIdentifier = null;
     let query = '';
     let favoritesOnly = false;
     let manageMode = false;
@@ -473,17 +517,16 @@ function openEditor(entry) {
     let draftIdentifier = null;
     let draft = null;
     let draftBaseline = null;
-    let draftBaselineEnabled = true;
     let promptPage = 1;
     const enabledOverrides = new Map();
     backdrop.addEventListener('click', event => {
-        if (event.target !== backdrop || (!dirty && !structureDirty)) return;
+        if (event.target !== backdrop || !hasPendingChanges()) return;
         event.stopImmediatePropagation();
         if (window.confirm('当前副本有未保存修改，确定关闭并丢弃吗？')) close();
     }, true);
 
     const workspace = document.createElement('div');
-    workspace.className = 'ps-prompt-workspace';
+    workspace.className = 'ps-prompt-workspace ps-list-view';
     const browser = document.createElement('section');
     browser.className = 'ps-prompt-browser';
     const search = document.createElement('input');
@@ -518,6 +561,27 @@ function openEditor(entry) {
     workspace.append(browser, detail);
     body.append(workspace);
 
+    const navigationButton = makeButton('关闭', () => {
+        if (!workspace.classList.contains('ps-list-view')) {
+            returnToList();
+            return;
+        }
+        if (hasPendingChanges() && !window.confirm('当前副本有未保存修改，确定关闭并丢弃吗？')) return;
+        close();
+    });
+
+    function showPromptDetail() {
+        workspace.classList.remove('ps-list-view');
+        workspace.classList.add('ps-mobile-detail');
+        navigationButton.textContent = '返回';
+    }
+
+    function returnToList() {
+        workspace.classList.remove('ps-mobile-detail');
+        workspace.classList.add('ps-list-view');
+        navigationButton.textContent = '关闭';
+    }
+
     function selectedPrompt() {
         if (draftIdentifier === selectedIdentifier && draft) return draft;
         return prompts.find(prompt => prompt?.identifier === selectedIdentifier) ?? null;
@@ -525,9 +589,31 @@ function openEditor(entry) {
 
     function isEnabled(identifier) {
         if (enabledOverrides.has(identifier)) return enabledOverrides.get(identifier);
-        if (draftIdentifier === identifier && draft?._presetSwitcherEnabled !== undefined) return draft._presetSwitcherEnabled;
+        return savedEnabled(identifier);
+    }
+
+    function savedEnabled(identifier) {
         const rows = orderGroups.flatMap(group => group.order ?? []);
         return rows.find(row => row.identifier === identifier)?.enabled !== false;
+    }
+
+    function hasPendingChanges() {
+        return dirty || structureDirty || enabledOverrides.size > 0;
+    }
+
+    function setPromptEnabled(identifier, enabled) {
+        if (enabled === savedEnabled(identifier)) enabledOverrides.delete(identifier);
+        else enabledOverrides.set(identifier, enabled);
+        for (const row of list.querySelectorAll('.ps-entry-row')) {
+            if (row.dataset.identifier !== identifier) continue;
+            const checkbox = row.querySelector('.ps-entry-toggle input');
+            checkbox.checked = enabled;
+            checkbox.parentElement.title = enabled ? '已启用，点击停用' : '已停用，点击启用';
+        }
+        if (draftIdentifier === identifier) {
+            const checkbox = detail.querySelector('.ps-entry-enabled input');
+            if (checkbox) checkbox.checked = enabled;
+        }
     }
 
     function refreshDraftDirty() {
@@ -535,16 +621,7 @@ function openEditor(entry) {
             dirty = false;
             return;
         }
-        const comparable = clone(draft);
-        delete comparable._presetSwitcherEnabled;
-        const enabled = draft._presetSwitcherEnabled ?? draftBaselineEnabled;
-        if (enabled === draftBaselineEnabled) {
-            enabledOverrides.delete(draftIdentifier);
-            delete draft._presetSwitcherEnabled;
-        } else {
-            enabledOverrides.set(draftIdentifier, enabled);
-        }
-        dirty = !equal(comparable, draftBaseline) || enabled !== draftBaselineEnabled;
+        dirty = !equal(draft, draftBaseline);
     }
 
     function refreshStructureDirty() {
@@ -563,10 +640,6 @@ function openEditor(entry) {
         const index = prompts.findIndex(prompt => prompt?.identifier === draftIdentifier);
         if (index < 0) return;
         const value = clone(draft);
-        if (value._presetSwitcherEnabled !== undefined) {
-            enabledOverrides.set(value.identifier, value._presetSwitcherEnabled);
-            delete value._presetSwitcherEnabled;
-        }
         prompts[index] = value;
     }
 
@@ -623,6 +696,10 @@ function openEditor(entry) {
             attachLongPressDrag(handle, row, prompt);
 
             const select = makeButton(displayName || '未命名提示词', () => {
+                if (selectedIdentifier === prompt.identifier) {
+                    showPromptDetail();
+                    return;
+                }
                 if (dirty && !window.confirm('当前条目有未保存修改，切换后会丢弃这条修改。继续吗？')) return;
                 selectedIdentifier = prompt.identifier;
                 dirty = false;
@@ -631,21 +708,28 @@ function openEditor(entry) {
                 draftBaseline = null;
                 renderRows(false);
                 renderDetail();
-                if (window.matchMedia('(max-width: 600px)').matches) workspace.classList.add('ps-mobile-detail');
+                showPromptDetail();
             }, 'ps-entry-select');
             select.title = displayName || prompt.identifier;
             const star = makeButton(favorites.has(prompt.identifier) ? '★' : '☆', () => toggleFavorite(prompt.identifier), 'ps-entry-star');
             star.title = favorites.has(prompt.identifier) ? '取消收藏' : '收藏条目';
-            const status = document.createElement('span');
-            status.className = `ps-entry-state${isEnabled(prompt.identifier) ? '' : ' ps-entry-state-disabled'}`;
-            status.textContent = isEnabled(prompt.identifier) ? '启用' : '停用';
+            const toggle = document.createElement('label');
+            toggle.className = 'ps-entry-toggle';
+            toggle.title = isEnabled(prompt.identifier) ? '已启用，点击停用' : '已停用，点击启用';
+            const enabled = document.createElement('input');
+            enabled.type = 'checkbox';
+            enabled.setAttribute('role', 'switch');
+            enabled.checked = isEnabled(prompt.identifier);
+            enabled.setAttribute('aria-label', `启用${displayName || '未命名提示词'}`);
+            enabled.addEventListener('change', () => setPromptEnabled(prompt.identifier, enabled.checked));
+            toggle.append(enabled);
             const remove = makeButton('', () => removePrompt(prompt), 'ps-delete-prompt ps-danger');
             remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path></svg>';
             remove.setAttribute('aria-label', `删除${prompt.name || '未命名提示词'}`);
             remove.hidden = !manageMode;
             remove.disabled = Boolean(prompt.marker);
             remove.title = prompt.marker ? '酒馆自动生成的条目不能删除' : '从当前角色卡预设副本中删除';
-            row.append(handle, select, star, status, remove);
+            row.append(handle, select, star, toggle, remove);
             list.append(row);
         }
     }
@@ -685,7 +769,6 @@ function openEditor(entry) {
         prompts.push(prompt);
         ensureOrderGroups();
         for (const group of orderGroups) group.order.push({ identifier, enabled: true });
-        enabledOverrides.set(identifier, true);
         selectedIdentifier = identifier;
         draftIdentifier = null;
         draft = null;
@@ -695,7 +778,7 @@ function openEditor(entry) {
         promptPage = Math.ceil(prompts.length / PROMPTS_PER_PAGE);
         renderRows(false);
         renderDetail();
-        if (window.matchMedia('(max-width: 600px)').matches) workspace.classList.add('ps-mobile-detail');
+        showPromptDetail();
     }
 
     function removePrompt(prompt) {
@@ -825,18 +908,16 @@ function openEditor(entry) {
             draftIdentifier = prompt.identifier;
             draft = clone(prompt);
             draftBaseline = clone(prompt);
-            draftBaselineEnabled = isEnabled(prompt.identifier);
             dirty = false;
         }
         const editablePrompt = selectedPrompt();
 
         const titleRow = document.createElement('div');
         titleRow.className = 'ps-prompt-detail-title';
-        const backToList = makeButton('‹ 条目列表', () => workspace.classList.remove('ps-mobile-detail'), 'ps-back-to-list');
         const title = document.createElement('h4');
         title.textContent = editablePrompt.name || '未命名提示词';
         const favorite = makeButton(favorites.has(prompt.identifier) ? '★ 已收藏' : '☆ 收藏条目', () => toggleFavorite(prompt.identifier));
-        titleRow.append(backToList, title, favorite);
+        titleRow.append(title, favorite);
 
         const form = document.createElement('div');
         form.className = 'ps-single-prompt-form';
@@ -879,10 +960,7 @@ function openEditor(entry) {
         enabled.type = 'checkbox';
         enabled.checked = isEnabled(editablePrompt.identifier);
         enabled.addEventListener('change', () => {
-            editablePrompt._presetSwitcherEnabled = enabled.checked;
-            enabledOverrides.set(editablePrompt.identifier, enabled.checked);
-            refreshDraftDirty();
-            renderRows(false);
+            setPromptEnabled(editablePrompt.identifier, enabled.checked);
         });
         const enabledLabel = document.createElement('label');
         enabledLabel.className = 'ps-entry-enabled';
@@ -923,48 +1001,42 @@ function openEditor(entry) {
     renderDetail();
 
     footer.append(
-        makeButton('关闭', () => {
-            if ((dirty || structureDirty) && !window.confirm('当前副本有未保存修改，确定关闭并丢弃吗？')) return;
-            close();
-        }),
+        navigationButton,
         makeButton('保存修改', async () => {
-            if (!dirty && !structureDirty) {
+            if (!hasPendingChanges()) {
                 toastr.info('内容与打开时一致，没有需要保存的修改');
                 return;
             }
             try {
-                commitDraftToPrompts();
                 const data = readCardData(characterId);
                 const target = findBoundPreset(data, entry.name);
                 if (!target) throw new Error('这个预设已从角色卡解绑');
                 const current = clone(target.value);
                 if (structureDirty) {
+                    commitDraftToPrompts();
                     current.prompts = clone(prompts);
                     current.prompt_order = clone(orderGroups);
-                    for (const [identifier, enabled] of enabledOverrides) setEnabledInValue(current, identifier, enabled);
-                } else if (draftIdentifier && draft) {
+                } else if (dirty && draftIdentifier && draft) {
                     const index = current.prompts?.findIndex(item => item?.identifier === draftIdentifier) ?? -1;
                     if (index < 0) throw new Error('当前角色卡里已找不到这条目，请重新打开编辑器');
                     const updatedPrompt = clone(draft);
-                    delete updatedPrompt._presetSwitcherEnabled;
                     current.prompts[index] = updatedPrompt;
-                    if (enabledOverrides.has(draftIdentifier)) setEnabledInValue(current, draftIdentifier, enabledOverrides.get(draftIdentifier));
-                } else {
-                    throw new Error('没有可保存的条目修改');
                 }
+                for (const [identifier, enabled] of enabledOverrides) setEnabledInValue(current, identifier, enabled);
                 target.value = current;
+                await persist(data, characterId);
                 entry.value = current;
                 const savedPrompt = current.prompts?.find(item => item?.identifier === selectedIdentifier) ?? null;
                 prompts.splice(0, prompts.length, ...(current.prompts ?? []));
-                for (const group of orderGroups) group.order = [];
                 orderGroups.splice(0, orderGroups.length, ...(current.prompt_order ?? []));
+                originalPrompts.splice(0, originalPrompts.length, ...clone(prompts));
+                originalOrderGroups.splice(0, originalOrderGroups.length, ...clone(orderGroups));
+                enabledOverrides.clear();
                 draft = savedPrompt ? clone(savedPrompt) : null;
                 draftIdentifier = savedPrompt?.identifier ?? null;
                 draftBaseline = savedPrompt ? clone(savedPrompt) : null;
-                draftBaselineEnabled = savedPrompt ? isEnabled(savedPrompt.identifier) : true;
                 dirty = false;
                 structureDirty = false;
-                await persist(data, characterId);
                 renderRows(false);
                 renderDetail();
                 if (data.activeName === entry.name && activeCharacterId() === characterId) await applyPreset(entry.name, characterId);
@@ -1189,6 +1261,13 @@ function editPresetNote(entry) {
 function openAppearanceDialog(setLauncherImageFromFile) {
     const settings = getUiSettings();
     const { body, footer, close } = createDialog('预设切换器设置', '设置悬浮球图标、列表显示模式，以及切换预设时是否保留当前 API 设置。');
+    const showLauncher = document.createElement('input');
+    showLauncher.type = 'checkbox';
+    showLauncher.checked = settings.launcherVisible;
+    const showLauncherLabel = document.createElement('label');
+    showLauncherLabel.className = 'ps-settings-checkbox';
+    showLauncherLabel.append(showLauncher, document.createTextNode('显示悬浮球'));
+    body.append(showLauncherLabel);
     const imageUrl = document.createElement('input');
     imageUrl.className = 'text_pole';
     imageUrl.type = 'url';
@@ -1243,9 +1322,11 @@ function openAppearanceDialog(setLauncherImageFromFile) {
     const saveOptions = async imageSource => {
         saveUiSettings({
             launcherImage: imageSource,
+            launcherVisible: showLauncher.checked,
             viewMode: mode.value === 'quick' ? 'quick' : 'full',
             preserveApiSettings: preserve.checked,
         });
+        if (!showLauncher.checked) closeSwitcherPanel();
         render();
     };
     footer.append(
@@ -1277,6 +1358,30 @@ function openAppearanceDialog(setLauncherImageFromFile) {
     );
 }
 
+function closeSwitcherPanel() {
+    if (!root) return;
+    root.querySelector('.ps-panel').hidden = true;
+    root.querySelector('.ps-launcher').setAttribute('aria-expanded', 'false');
+}
+
+function createExtensionSettings(openPanel, openSettings) {
+    const container = document.querySelector('#extensions_settings2') ?? document.querySelector('#extensions_settings');
+    if (!container || document.getElementById('preset-switcher-settings')) return;
+    const settings = document.createElement('div');
+    settings.id = 'preset-switcher-settings';
+    settings.className = 'extension_container';
+    settings.innerHTML = '<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header"><b>预设切换器</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content"><label class="checkbox_label"><input id="preset-switcher-launcher-visible" type="checkbox">显示悬浮球</label><div class="ps-settings-actions"></div></div></div>';
+    launcherVisibilityControl = settings.querySelector('input');
+    launcherVisibilityControl.checked = getUiSettings().launcherVisible;
+    launcherVisibilityControl.addEventListener('change', () => {
+        saveUiSettings({ launcherVisible: launcherVisibilityControl.checked });
+        if (!launcherVisibilityControl.checked) closeSwitcherPanel();
+        render();
+    });
+    settings.querySelector('.ps-settings-actions').append(makeButton('管理角色预设', openPanel), makeButton('设置', openSettings));
+    container.append(settings);
+}
+
 function getEntryStatus(entry, availablePresets, latestByName) {
     const sourceName = sourcePresetName(entry);
     if (!availablePresets.has(sourceName)) return '原预设已删除或改名';
@@ -1288,9 +1393,12 @@ function getEntryStatus(entry, availablePresets, latestByName) {
 
 function render() {
     if (!root) return;
+    const uiSettings = getUiSettings();
+    if (launcherVisibilityControl) launcherVisibilityControl.checked = uiSettings.launcherVisible;
     const characterId = activeCharacterId();
     const character = characterId === null || characterId === undefined ? null : characters?.[characterId];
-    root.hidden = !character || main_api !== 'openai';
+    root.hidden = !character || main_api !== 'openai' || (!uiSettings.launcherVisible && root.querySelector('.ps-panel').hidden);
+    root.querySelector('.ps-launcher').hidden = !uiSettings.launcherVisible;
     if (!character) return;
 
     if (renderedCharacterId !== characterId) {
@@ -1396,7 +1504,7 @@ function render() {
         const actions = document.createElement('div');
         actions.className = 'ps-actions';
         const select = makeButton(data.activeName === entry.name ? '当前使用中' : '切换到此预设', () => applyPreset(entry.name), data.activeName === entry.name ? 'ps-selected' : '');
-        select.disabled = !isOpenAi || !availablePresets.has(sourcePresetName(entry));
+        select.disabled = !isOpenAi || applyingCharacterId !== null || !availablePresets.has(sourcePresetName(entry));
         actions.append(select);
         if (!quickMode) {
             actions.append(makeButton('编辑副本', () => openEditor(entry)), makeButton('复制副本', () => copyPreset(entry)), makeButton('备注', () => editPresetNote(entry)));
@@ -1409,6 +1517,7 @@ function render() {
         row.append(actions);
         list.append(row);
     }
+    keepPanelInViewport(root);
 }
 
 function createUi() {
@@ -1520,8 +1629,8 @@ function createUi() {
         render();
     });
     element.querySelector('.ps-close').addEventListener('click', () => {
-        panel.hidden = true;
-        launcher.setAttribute('aria-expanded', 'false');
+        closeSwitcherPanel();
+        render();
     });
     element.querySelector('.ps-appearance-toggle').addEventListener('click', () => {
         openAppearanceDialog(setLauncherImageFromFile);
@@ -1531,6 +1640,19 @@ function createUi() {
         const select = element.querySelector('.ps-add-select');
         if (select.value) await bindPreset(select.value);
     });
+    createExtensionSettings(() => {
+        if (activeCharacterId() === null || activeCharacterId() === undefined || main_api !== 'openai') {
+            toastr.info('请先打开角色卡聊天并切换到 OpenAI / 聊天补全');
+            return;
+        }
+        panel.hidden = false;
+        launcher.setAttribute('aria-expanded', 'true');
+        const extensionDrawer = document.getElementById('rm_extensions_block');
+        if (extensionDrawer?.classList.contains('openDrawer')) {
+            extensionDrawer.closest('.drawer')?.querySelector('.drawer-toggle')?.click();
+        }
+        render();
+    }, () => openAppearanceDialog(setLauncherImageFromFile));
     return element;
 }
 

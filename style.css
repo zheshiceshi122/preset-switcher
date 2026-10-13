@@ -1,3 +1,19 @@
+.ps-settings-actions {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+    margin-top: .4rem;
+}
+
+#preset-switcher-settings .ps-settings-actions button {
+    flex: 0 0 auto;
+    margin: 0;
+    padding: .4rem .65rem;
+    white-space: nowrap;
+    width: auto;
+}
+
 #preset-switcher-root {
     --ps-launcher-size: 2rem;
     --ps-launcher-hit-size: 3rem;
@@ -90,6 +106,7 @@
     position: absolute;
     right: 0;
     width: min(27rem, calc(100vw - 2rem));
+    transform: translateX(var(--ps-panel-shift, 0px));
     backdrop-filter: blur(18px);
 }
 
@@ -574,8 +591,7 @@
     white-space: nowrap;
 }
 
-.ps-result-count,
-.ps-entry-state {
+.ps-result-count {
     color: var(--SmartThemeEmColor, #aaa);
     font-size: .78rem;
     white-space: nowrap;
@@ -596,13 +612,13 @@
     box-sizing: border-box;
     display: grid;
     gap: .25rem;
-    grid-template-columns: minmax(0, 1fr) 2rem 2.7rem;
+    grid-template-columns: minmax(0, 1fr) 2rem 2.75rem;
     height: 42px;
     padding: .2rem .35rem;
 }
 
 .ps-entry-list.ps-manage-mode .ps-entry-row {
-    grid-template-columns: 1.5rem minmax(0, 1fr) 1.8rem 2.1rem 2rem;
+    grid-template-columns: 1.5rem minmax(0, 1fr) 1.8rem 2.75rem 2rem;
 }
 
 .ps-drag-handle,
@@ -668,6 +684,7 @@
     flex: 1 1 auto;
     margin: 0 !important;
     min-width: 0;
+    justify-content: flex-start;
     overflow: hidden;
     padding: .35rem !important;
     text-align: left;
@@ -682,12 +699,70 @@
     padding: .2rem !important;
 }
 
-.ps-entry-state {
-    text-align: right;
+.ps-entry-toggle {
+    align-items: center;
+    cursor: pointer;
+    display: flex;
+    justify-content: center;
+    min-height: 40px;
+    min-width: 44px;
 }
 
-.ps-entry-state-disabled {
-    color: var(--SmartThemeWarningColor, #b88b26);
+.ps-entry-toggle input[type="checkbox"] {
+    appearance: none;
+    background: var(--black30a, rgba(0, 0, 0, .3));
+    border: 1px solid var(--SmartThemeEmColor, #aaa);
+    border-radius: 999px;
+    box-sizing: border-box;
+    box-shadow: none;
+    cursor: pointer;
+    flex: 0 0 36px;
+    filter: none;
+    height: 20px;
+    margin: 0;
+    outline: none;
+    padding: 0;
+    position: relative;
+    transform: none;
+    width: 36px;
+}
+
+.ps-entry-toggle input[type="checkbox"]::before {
+    background: var(--SmartThemeEmColor, #aaa);
+    border-radius: 50%;
+    box-shadow: none;
+    clip-path: none;
+    content: '';
+    height: 14px;
+    left: 2px;
+    position: absolute;
+    top: 2px;
+    transform: none;
+    transition: none;
+    width: 14px;
+}
+
+.ps-entry-toggle input[type="checkbox"]:checked {
+    background: var(--SmartThemeQuoteColor, #6955c7);
+    border-color: var(--SmartThemeQuoteColor, #6955c7);
+}
+
+.ps-entry-toggle input[type="checkbox"]:checked::before {
+    background: #fff;
+    left: 18px;
+}
+
+.ps-entry-toggle input[type="checkbox"]:focus-visible {
+    outline: 2px solid var(--SmartThemeBodyColor, #eee);
+    outline-offset: 3px;
+}
+
+.ps-prompt-workspace.ps-list-view {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.ps-prompt-workspace.ps-list-view .ps-prompt-detail {
+    display: none;
 }
 
 .ps-prompt-detail {
@@ -703,10 +778,6 @@
     margin: 0;
     min-width: 0;
     overflow-wrap: anywhere;
-}
-
-.ps-back-to-list {
-    display: none;
 }
 
 .ps-single-prompt-form {
@@ -840,11 +911,6 @@
 
     .ps-prompt-workspace.ps-mobile-detail .ps-prompt-detail {
         display: flex;
-    }
-
-    .ps-back-to-list {
-        display: block;
-        flex: 0 0 auto;
     }
 
     .ps-prompt-detail-title {
