@@ -77,6 +77,9 @@ function getUiSettings() {
         launcherImage: typeof value.launcherImage === 'string' ? value.launcherImage : '',
         launcherVisible: value.launcherVisible !== false,
         editorCollapsedGroups: isObject(value.editorCollapsedGroups) ? value.editorCollapsedGroups : {},
+        customPromptPageSize: value.customPromptPageSize === true,
+        promptPageSize: Number.isInteger(value.promptPageSize) && value.promptPageSize >= 1 && value.promptPageSize <= 500 ? value.promptPageSize : PROMPTS_PER_PAGE,
+        promptPageAutoTop: value.promptPageAutoTop !== false,
         viewMode: value.viewMode === 'quick' ? 'quick' : 'full',
         preserveApiSettings: value.preserveApiSettings === true,
     };
@@ -85,6 +88,10 @@ function getUiSettings() {
 function saveUiSettings(changes) {
     extension_settings[UI_SETTINGS_KEY] = { ...getUiSettings(), ...changes };
     saveSettingsDebounced();
+}
+
+function getPromptPageSize(settings = getUiSettings()) {
+    return settings.customPromptPageSize ? settings.promptPageSize : PROMPTS_PER_PAGE;
 }
 
 function applyLauncherPosition(element) {
@@ -491,6 +498,68 @@ function showEditorHelp(helpText, modeOptions = null) {
         modeSection.append(modeTitle, modeGroup);
         body.append(modeSection);
         updateMode();
+
+        const pagingSection = document.createElement('section');
+        pagingSection.className = 'ps-help-mode-section';
+        const pagingTitle = document.createElement('h4');
+        pagingTitle.textContent = '条目分页';
+        const settings = getUiSettings();
+        const addSwitch = (text, checked, onChange) => {
+            const row = document.createElement('label');
+            row.className = 'ps-help-setting';
+            const caption = document.createElement('span');
+            caption.textContent = text;
+            const toggle = document.createElement('span');
+            toggle.className = 'ps-entry-toggle';
+            const input = document.createElement('input');
+            input.type = 'checkbox';
+            input.setAttribute('role', 'switch');
+            input.checked = checked;
+            input.addEventListener('change', () => onChange(input.checked));
+            toggle.append(input);
+            row.append(caption, toggle);
+            pagingSection.append(row);
+        };
+        const sizeRow = document.createElement('label');
+        sizeRow.className = 'ps-help-setting';
+        const sizeCaption = document.createElement('span');
+        sizeCaption.textContent = '每页条目数（1–500）';
+        const sizeInput = document.createElement('input');
+        sizeInput.className = 'text_pole ps-help-page-size';
+        sizeInput.type = 'number';
+        sizeInput.min = '1';
+        sizeInput.max = '500';
+        sizeInput.step = '1';
+        sizeInput.value = String(settings.promptPageSize);
+        sizeInput.disabled = !settings.customPromptPageSize;
+        sizeInput.addEventListener('change', () => {
+            const count = Number(sizeInput.value);
+            if (!Number.isInteger(count) || count < 1 || count > 500) {
+                sizeInput.setCustomValidity('请输入 1 到 500 的整数');
+                sizeInput.reportValidity();
+                return;
+            }
+            sizeInput.setCustomValidity('');
+            saveUiSettings({ promptPageSize: count });
+            modeOptions.onPagingChange();
+        });
+        sizeInput.addEventListener('input', () => sizeInput.setCustomValidity(''));
+        pagingSection.append(pagingTitle);
+        addSwitch('自定义每页条目数', settings.customPromptPageSize, enabled => {
+            sizeInput.disabled = !enabled;
+            saveUiSettings({ customPromptPageSize: enabled });
+            modeOptions.onPagingChange();
+        });
+        sizeRow.append(sizeCaption, sizeInput);
+        pagingSection.append(sizeRow);
+        addSwitch('翻页自动回到顶部', settings.promptPageAutoTop, enabled => {
+            saveUiSettings({ promptPageAutoTop: enabled });
+        });
+        const pagingHint = document.createElement('p');
+        pagingHint.className = 'ps-editor-hint';
+        pagingHint.textContent = '设置自动记住并跨角色使用。关闭自定义后每页显示 15 条；这些设置不会修改预设副本。';
+        pagingSection.append(pagingHint);
+        body.append(pagingSection);
     }
     footer.append(makeButton('知道了', close, 'ps-primary'));
 }
@@ -541,6 +610,15 @@ function openEditor(entry) {
     const modeOptions = {
         getEnabled: () => manageMode,
         onChange: enabled => setManageMode(enabled),
+        onPagingChange: () => {
+            const nextSize = getPromptPageSize();
+            if (nextSize === promptPageSize) return;
+            const firstIndex = (promptPage - 1) * promptPageSize;
+            promptPageSize = nextSize;
+            promptPage = Math.floor(firstIndex / promptPageSize) + 1;
+            renderRows(false);
+            list.scrollTop = 0;
+        },
     };
     const { backdrop, body, footer, close } = createDialog(`编辑「${entry.name}」的角色专属版本`, '', { helpText, modeOptions });
     backdrop.querySelector('.ps-dialog').classList.add('ps-prompt-editor');
@@ -576,6 +654,7 @@ function openEditor(entry) {
     let draft = null;
     let draftBaseline = null;
     let promptPage = 1;
+    let promptPageSize = getPromptPageSize();
     const enabledOverrides = new Map();
     backdrop.addEventListener('click', event => {
         if (event.target !== backdrop || !hasPendingChanges()) return;
@@ -609,8 +688,16 @@ function openEditor(entry) {
     list.setAttribute('role', 'listbox');
     list.setAttribute('aria-label', '提示词条目');
     const promptPager = createPager('ps-prompt-pager', '条目列表', page => {
+        const previousPage = promptPage;
+        const previousScroll = list.scrollTop;
         promptPage = page;
         renderRows(false);
+        if (promptPage !== previousPage && getUiSettings().promptPageAutoTop) {
+            list.scrollTop = 0;
+            body.scrollTop = 0;
+        } else {
+            list.scrollTop = previousScroll;
+        }
     });
     browser.append(search, browserToolbar, list, promptPager.element);
 
@@ -791,10 +878,10 @@ function openEditor(entry) {
             list.scrollTop = 0;
         }
         const filtered = filteredPrompts();
-        const pageCount = Math.max(1, Math.ceil(filtered.length / PROMPTS_PER_PAGE));
+        const pageCount = Math.max(1, Math.ceil(filtered.length / promptPageSize));
         promptPage = Math.min(pageCount, Math.max(1, promptPage));
-        const start = (promptPage - 1) * PROMPTS_PER_PAGE;
-        const pageItems = filtered.slice(start, start + PROMPTS_PER_PAGE);
+        const start = (promptPage - 1) * promptPageSize;
+        const pageItems = filtered.slice(start, start + promptPageSize);
         resultCount.textContent = `${filtered.length} 条`;
         promptPager.update(promptPage, pageCount, filtered.length);
         list.replaceChildren();
@@ -914,7 +1001,7 @@ function openEditor(entry) {
         draftBaseline = null;
         dirty = false;
         refreshStructureDirty();
-        promptPage = Math.ceil(prompts.length / PROMPTS_PER_PAGE);
+        promptPage = Math.ceil(prompts.length / promptPageSize);
         renderRows(false);
         renderDetail();
         showPromptDetail();
