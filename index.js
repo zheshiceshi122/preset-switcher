@@ -24,9 +24,11 @@ let renderedCharacterId = null;
 let launcherVisibilityControl;
 let characterDrawControl;
 let characterDraw;
+let initialized = false;
 
 const PRESETS_PER_PAGE = 8;
 const PROMPTS_PER_PAGE = 15;
+const DEFAULT_LAUNCHER_SIZE = 40;
 
 const clone = value => value === MISSING ? MISSING : structuredClone(value);
 
@@ -80,7 +82,7 @@ function getUiSettings() {
         topRatio: Number.isFinite(value.topRatio) ? Math.min(1, Math.max(0, value.topRatio)) : 0.68,
         launcherImage: typeof value.launcherImage === 'string' ? value.launcherImage : '',
         launcherVisible: value.launcherVisible !== false,
-        launcherSize: Number.isInteger(value.launcherSize) && value.launcherSize >= 24 && value.launcherSize <= 80 ? value.launcherSize : 32,
+        launcherSize: Number.isInteger(value.launcherSize) && value.launcherSize >= 24 && value.launcherSize <= 80 ? value.launcherSize : DEFAULT_LAUNCHER_SIZE,
         characterDrawEnabled: value.characterDrawEnabled === true,
         drawScope: value.drawScope === 'favorites' ? 'favorites' : 'all',
         drawExcludeCurrent: value.drawExcludeCurrent !== false,
@@ -103,14 +105,13 @@ function getPromptPageSize(settings = getUiSettings()) {
     return settings.customPromptPageSize ? settings.promptPageSize : PROMPTS_PER_PAGE;
 }
 
-function applyLauncherPosition(element) {
-    const settings = getUiSettings();
+function applyLauncherPosition(element, settings = getUiSettings()) {
     const hitSize = Math.max(48, settings.launcherSize + 16);
     element.style.setProperty('--ps-launcher-size', `${settings.launcherSize}px`);
     element.style.setProperty('--ps-launcher-hit-size', `${hitSize}px`);
-    const launcher = element.querySelector('.ps-launcher');
-    const width = launcher?.offsetWidth || hitSize;
-    const height = launcher?.offsetHeight || hitSize;
+    // Use the configured box size, including while the launcher is hidden.
+    const width = hitSize;
+    const height = hitSize;
     const maxTop = Math.max(8, window.innerHeight - height - 8);
     const top = Math.min(maxTop, Math.max(8, settings.topRatio * maxTop));
     const maxLeft = Math.max(0, window.innerWidth - width);
@@ -1712,10 +1713,10 @@ function openAppearanceDialog(setLauncherImageFromFile) {
         const size = readSize();
         if (size !== null) updateSizePreview(size);
     });
-    const resetSize = makeButton('恢复 32 px', () => {
-        sizeNumber.value = '32';
+    const resetSize = makeButton(`恢复 ${DEFAULT_LAUNCHER_SIZE} px`, () => {
+        sizeNumber.value = String(DEFAULT_LAUNCHER_SIZE);
         sizeNumber.setCustomValidity('');
-        updateSizePreview(32);
+        updateSizePreview(DEFAULT_LAUNCHER_SIZE);
     }, 'ps-launcher-size-reset');
     updateSizePreview(settings.launcherSize);
     body.append(
@@ -1752,7 +1753,6 @@ function openAppearanceDialog(setLauncherImageFromFile) {
         });
         if (!showLauncher.checked) closeSwitcherPanel();
         render();
-        applyLauncherPosition(root);
     };
     footer.append(
         makeButton('取消', close),
@@ -1843,6 +1843,7 @@ function render() {
     const canUsePresets = Boolean(character) && main_api === 'openai';
     root.hidden = (!canUsePresets && !uiSettings.characterDrawEnabled) || (!uiSettings.launcherVisible && root.querySelector('.ps-panel').hidden);
     root.querySelector('.ps-launcher').hidden = !uiSettings.launcherVisible;
+    if (!root.hidden) applyLauncherPosition(root, uiSettings);
 
     if (renderedCharacterId !== characterId) {
         renderedCharacterId = characterId;
@@ -1973,6 +1974,7 @@ function createUi() {
     if (document.getElementById(ROOT_ID)) return document.getElementById(ROOT_ID);
     const element = document.createElement('div');
     element.id = ROOT_ID;
+    element.hidden = true;
     element.innerHTML = `
         <button type="button" class="ps-launcher" aria-label="打开预设切换器" aria-expanded="false"><span class="ps-launcher-face"><img class="ps-launcher-image" alt="" draggable="false" hidden><span class="ps-launcher-label">预</span></span></button>
         <section class="ps-panel" hidden>
@@ -1989,7 +1991,6 @@ function createUi() {
     // SillyTavern gives <body> a fixed full-viewport box while <html> can have
     // zero height. Anchor the floating UI to that body box instead.
     document.body.append(element);
-    applyLauncherPosition(element);
     const launcher = element.querySelector('.ps-launcher');
     const panel = element.querySelector('.ps-panel');
     const openPresetPanel = () => {
@@ -2125,6 +2126,7 @@ async function onChatChanged() {
 }
 
 export function init() {
+    if (initialized) return;
     root = createUi();
     // Inject the character copy before BaiBai's early render and group cache.
     eventSource.makeFirst(event_types.OAI_PRESET_CHANGED_BEFORE, ({ preset, presetName, settingsToUpdate }) => {
@@ -2156,5 +2158,10 @@ export function init() {
         if (activeCharacterId() !== null && activeCharacterId() !== undefined) onChatChanged();
     });
     document.addEventListener('visibilitychange', scheduleRender);
+    initialized = true;
     scheduleRender();
 }
+
+// ST versions without manifest activation hooks load the module but never call init.
+// Newer hosts may use both entry points; the guard keeps UI and listeners unique.
+jQuery(init);

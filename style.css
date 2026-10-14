@@ -254,8 +254,8 @@
 }
 
 #preset-switcher-root {
-    --ps-launcher-size: 2rem;
-    --ps-launcher-hit-size: 3rem;
+    --ps-launcher-size: 40px;
+    --ps-launcher-hit-size: 56px;
     --ps-bg: var(--SmartThemeBlurTintColor, rgba(28, 28, 35, 0.96));
     --ps-border: var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.16));
     --ps-text: var(--SmartThemeBodyColor, #eee);
