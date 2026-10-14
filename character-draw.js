@@ -12,11 +12,11 @@ export function drawCandidates(characters, settings, currentAvatar) {
     });
 }
 
-export function createCharacterDraw({ host, getSettings, saveSettings, createDialog, makeButton, openPresets, canOpenPresets }) {
+export function createCharacterDraw({ host, getSettings, saveSettings, createDialog, makeButton, openPresets, canOpenPresets, getPresetPool, canApplyPreset, applyPreset }) {
     let active = null;
     let settingsDialog = null;
     let animation = null;
-    const drawn = new Set();
+    const drawn = { characters: new Set(), presets: new Set() };
 
     function closeSettings() {
         settingsDialog?.backdrop.remove();
@@ -44,14 +44,44 @@ export function createCharacterDraw({ host, getSettings, saveSettings, createDia
         });
     }
 
-    function candidates() {
+    function characterCandidates() {
         const current = host.characters?.[host.this_chid]?.avatar;
-        return drawCandidates(host.characters, getSettings(), current);
+        return drawCandidates(host.characters, getSettings(), current).map(character => ({
+            key: character.avatar,
+            kind: 'character',
+            name: character.name || '未命名角色',
+            avatar: character.avatar,
+            source: character,
+        }));
+    }
+
+    function presetPool() {
+        const pool = getPresetPool?.() ?? { scope: 'global', entries: [] };
+        const scope = pool.scope === 'character' ? 'character' : 'global';
+        const entries = Array.isArray(pool.entries) ? pool.entries : [];
+        return {
+            scope,
+            entries: entries.map(entry => ({
+                key: `${scope}:${entry.name}`,
+                kind: 'preset',
+                name: scope === 'character' ? (entry.sourceName || entry.name) : entry.name,
+                scope,
+                source: entry,
+            })),
+        };
+    }
+
+    function presetCandidates() {
+        return presetPool().entries;
+    }
+
+    function candidates(mode) {
+        return mode === 'presets' ? presetCandidates() : characterCandidates();
     }
 
     function openChoice() {
         close();
-        const dialog = createDialog('今天想做什么？', '管理角色预设，或抽一张角色卡开始聊天。');
+        const dialog = createDialog('今天想做什么？', '管理角色预设，或开始一场随机选择。');
         active = dialog;
         dialog.backdrop.querySelector('.ps-dialog').classList.add('ps-entry-choice-dialog');
         dismissible(dialog, close);
@@ -71,9 +101,9 @@ export function createCharacterDraw({ host, getSettings, saveSettings, createDia
             return button;
         };
         const available = canOpenPresets();
-        const preset = tile(PRESET_SVG, '预设切换器', available ? '切换、编辑当前角色的预设' : '先进入角色聊天并使用聊天补全 API', () => { close(); openPresets(); });
+        const preset = tile(PRESET_SVG, '预设切换器', available ? '切换、编辑当前角色绑定的预设' : '先进入角色聊天并使用聊天补全 API', () => { close(); openPresets(); });
         preset.disabled = !available;
-        const draw = tile(DICE_SVG, '角色抽卡', '把下一场故事交给随机', open);
+        const draw = tile(DICE_SVG, '角色 / 预设抽卡', '一次抽出 1–5 个结果，再选一个开始', open);
         dialog.body.append(choices);
         dialog.footer.append(makeButton('关闭', close));
         draw.focus();
@@ -81,26 +111,40 @@ export function createCharacterDraw({ host, getSettings, saveSettings, createDia
 
     function openDrawSettings(onSaved) {
         closeSettings();
-        const dialog = createDialog('抽卡设置', '只决定抽卡范围，不修改角色卡或预设。');
+        const dialog = createDialog('抽卡设置', '设置每次抽取数量、角色范围和预设范围。');
         dialog.backdrop.querySelector('.ps-dialog').classList.add('ps-draw-settings-dialog');
         settingsDialog = dialog;
         dismissible(dialog, closeSettings);
         const settings = getSettings();
-        const rangeLabel = document.createElement('label');
-        rangeLabel.className = 'ps-settings-field';
-        const caption = document.createElement('span');
-        caption.textContent = '抽卡范围';
-        const scope = document.createElement('select');
-        scope.className = 'text_pole';
+        const field = (title, control) => {
+            const label = document.createElement('label');
+            label.className = 'ps-settings-field';
+            const caption = document.createElement('span');
+            caption.textContent = title;
+            label.append(caption, control);
+            dialog.body.append(label);
+            return control;
+        };
+        const count = document.createElement('select');
+        count.className = 'text_pole';
+        for (let value = 1; value <= 5; value++) {
+            const option = document.createElement('option');
+            option.value = String(value);
+            option.textContent = `${value} 抽`;
+            count.append(option);
+        }
+        count.value = String(settings.drawCount);
+        field('每次抽取数量', count);
+        const range = document.createElement('select');
+        range.className = 'text_pole';
         for (const [value, title] of [['all', '全部角色'], ['favorites', '仅收藏角色']]) {
             const option = document.createElement('option');
             option.value = value;
             option.textContent = title;
-            scope.append(option);
+            range.append(option);
         }
-        scope.value = settings.drawScope;
-        rangeLabel.append(caption, scope);
-        dialog.body.append(rangeLabel);
+        range.value = settings.drawScope;
+        field('角色抽卡范围', range);
         const checkbox = (caption, checked) => {
             const label = document.createElement('label');
             label.className = 'ps-settings-checkbox';
@@ -112,35 +156,58 @@ export function createCharacterDraw({ host, getSettings, saveSettings, createDia
             return input;
         };
         const exclude = checkbox('排除当前正在玩的角色', settings.drawExcludeCurrent);
+        const currentCharacterPresetsOnly = checkbox('预设抽卡仅使用当前角色绑定的预设', settings.drawCurrentCharacterPresetsOnly);
         const repeat = checkbox('同一轮不重复抽取', settings.drawNoRepeat);
         const hint = document.createElement('p');
         hint.className = 'ps-editor-hint';
-        hint.textContent = '收藏使用酒馆角色库里的收藏标记。同轮不重复开启时，抽完候选会自动开始下一轮；只有一张候选时仍可再次抽取。';
+        hint.textContent = '开启后，角色聊天中只从当前角色绑定的预设抽取；关闭后始终从酒馆全局预设库抽取。未进入角色聊天时始终使用全局预设。数量超过候选数时，同一轮可能重复。';
         dialog.body.append(hint);
         dialog.footer.append(makeButton('取消', closeSettings), makeButton('保存设置', () => {
-            saveSettings({ drawScope: scope.value, drawExcludeCurrent: exclude.checked, drawNoRepeat: repeat.checked });
-            drawn.clear();
+            saveSettings({ drawCount: Number(count.value), drawScope: range.value, drawCurrentCharacterPresetsOnly: currentCharacterPresetsOnly.checked, drawExcludeCurrent: exclude.checked, drawNoRepeat: repeat.checked });
+            drawn.characters.clear();
+            drawn.presets.clear();
             closeSettings();
             onSaved();
         }, 'ps-primary'));
-        scope.focus();
+        count.focus();
     }
 
     function open() {
         close();
-        const dialog = createDialog('角色抽卡', '下一场故事，从这里开始。');
+        const dialog = createDialog('角色 / 预设抽卡', '随机抽取一组结果，选中一个后再开玩或切换。');
         active = dialog;
         dialog.backdrop.querySelector('.ps-dialog').classList.add('ps-draw-dialog');
         dismissible(dialog, close);
-        let selected = null;
+        let mode = 'characters';
+        let results = [];
+        let selectedIndex = -1;
         let busy = false;
         let opening = false;
+
+        const modeSelector = document.createElement('div');
+        modeSelector.className = 'ps-draw-mode';
+        const modeButtons = {};
+        for (const [value, label] of [['characters', '角色'], ['presets', '预设']]) {
+            const button = makeButton(label, () => {
+                if (mode === value || busy || opening) return;
+                mode = value;
+                results = [];
+                selectedIndex = -1;
+                renderResult();
+            }, 'ps-draw-mode-button');
+            button.dataset.mode = value;
+            button.setAttribute('aria-pressed', 'false');
+            modeButtons[value] = button;
+            modeSelector.append(button);
+        }
+
         const toolbar = document.createElement('div');
         toolbar.className = 'ps-draw-toolbar';
         const scopeText = document.createElement('span');
         scopeText.className = 'ps-draw-scope';
         const settingsButton = makeButton('', () => openDrawSettings(() => {
-            selected = null;
+            results = [];
+            selectedIndex = -1;
             renderResult();
         }), 'ps-draw-settings-button');
         settingsButton.innerHTML = SETTINGS_SVG;
@@ -148,107 +215,199 @@ export function createCharacterDraw({ host, getSettings, saveSettings, createDia
         settingsButton.setAttribute('aria-label', '抽卡设置');
         dialog.backdrop.querySelector('.ps-dialog-titlebar').append(settingsButton);
         toolbar.append(scopeText);
+
+        const placeholder = document.createElement('div');
+        placeholder.className = 'ps-draw-empty-state';
+        const placeholderIcon = document.createElement('span');
+        placeholderIcon.className = 'ps-draw-empty-icon';
+        placeholderIcon.innerHTML = DICE_SVG;
+        const placeholderCopy = document.createElement('span');
+        placeholderCopy.className = 'ps-draw-empty-copy';
+        placeholderCopy.innerHTML = '<strong>抽一组结果，挑一个开始</strong><small>角色抽卡可以选择下一张卡；预设抽卡范围可在右上角设置中选择当前角色绑定预设或酒馆全局预设。</small>';
+        placeholder.append(placeholderIcon, placeholderCopy);
+        const grid = document.createElement('div');
+        grid.className = 'ps-draw-result-grid';
         const stage = document.createElement('div');
         stage.className = 'ps-draw-stage';
-        const card = document.createElement('div');
-        card.className = 'ps-draw-card';
-        const placeholder = document.createElement('div');
-        placeholder.className = 'ps-draw-placeholder';
-        placeholder.innerHTML = DICE_SVG;
-        const image = document.createElement('img');
-        image.className = 'ps-draw-avatar';
-        image.alt = '';
-        image.hidden = true;
-        image.addEventListener('error', () => { image.hidden = true; placeholder.hidden = false; });
-        card.append(placeholder, image);
-        stage.append(card);
-        const name = document.createElement('h4');
-        name.className = 'ps-draw-name';
+        stage.append(placeholder, grid);
         const status = document.createElement('p');
         status.className = 'ps-draw-status';
         status.setAttribute('role', 'status');
-        dialog.body.append(toolbar, stage, name, status);
+        dialog.body.append(modeSelector, toolbar, stage, status);
+
         const drawButton = makeButton('抽一张', draw, 'ps-primary ps-draw-button');
-        const playButton = makeButton('开玩', play, 'ps-primary ps-draw-play');
+        const actionButton = makeButton('开玩', actOnSelection, 'ps-primary ps-draw-action');
         const back = makeButton('返回功能选择', openChoice, 'ps-draw-back');
-        dialog.footer.append(drawButton, playButton, back);
+        dialog.footer.append(drawButton, actionButton, back);
 
         function renderResult() {
-            const pool = candidates();
+            const pool = candidates(mode);
             const settings = getSettings();
-            scopeText.textContent = `${settings.drawScope === 'favorites' ? '仅收藏角色' : '全部角色'} · ${pool.length} 张候选`;
-            if (selected && !pool.some(character => character.avatar === selected.avatar)) selected = null;
-            name.textContent = selected ? selected.name || '未命名角色' : '今天，和谁开启故事？';
-            status.textContent = pool.length ? selected ? '喜欢这张就开玩，也可以再抽一张。' : '点击下方按钮，随机遇见一位角色。' : settings.drawScope === 'favorites' ? '没有可抽取的收藏角色。可在右上角切换范围，或先收藏角色。' : '没有可抽取的角色。请先导入角色卡，或取消排除当前角色。';
-            placeholder.hidden = Boolean(selected);
-            image.hidden = !selected;
-            if (selected) {
-                image.alt = selected.name || '角色头像';
-                image.src = host.getThumbnailUrl?.('avatar', selected.avatar) ?? `/thumbnail?type=avatar&file=${encodeURIComponent(selected.avatar)}`;
-            } else {
-                image.removeAttribute('src');
+            const selected = results[selectedIndex] ?? null;
+            const selectionStillAvailable = selected && pool.some(item => item.key === selected.key);
+            if (selected && !selectionStillAvailable) {
+                results = [];
+                selectedIndex = -1;
             }
-            card.classList.toggle('ps-draw-card-result', Boolean(selected));
-            drawButton.textContent = selected ? '再抽一张' : '抽一张';
-            drawButton.classList.toggle('ps-primary', !selected);
-            drawButton.disabled = busy || opening || !pool.length;
-            playButton.hidden = !selected;
-            dialog.footer.classList.toggle('ps-draw-has-result', Boolean(selected));
-            playButton.disabled = busy || opening;
+            const currentSelection = results[selectedIndex] ?? null;
+            modeButtons.characters.setAttribute('aria-pressed', String(mode === 'characters'));
+            modeButtons.presets.setAttribute('aria-pressed', String(mode === 'presets'));
+            modeButtons.characters.classList.toggle('ps-selected-mode', mode === 'characters');
+            modeButtons.presets.classList.toggle('ps-selected-mode', mode === 'presets');
+            modeButtons.presets.disabled = busy || opening;
+            modeButtons.characters.disabled = busy || opening;
+            const presetSource = presetPool();
+            const scope = mode === 'characters'
+                ? (settings.drawScope === 'favorites' ? '仅收藏角色' : '全部角色')
+                : (presetSource.scope === 'character' ? '当前角色绑定预设' : '全局预设库');
+            scopeText.textContent = `${scope} · ${pool.length} 个候选 · 每次 ${settings.drawCount} 抽`;
+            placeholder.hidden = results.length > 0;
+            grid.hidden = results.length === 0;
+            placeholder.classList.toggle('ps-draw-is-busy', busy);
+            placeholder.setAttribute('aria-hidden', String(results.length > 0));
+            grid.replaceChildren();
+            grid.dataset.count = String(results.length);
+            for (const [index, item] of results.entries()) {
+                const tile = makeButton('', () => {
+                    if (busy || opening) return;
+                    selectedIndex = index;
+                    renderResult();
+                }, 'ps-draw-result');
+                tile.classList.toggle('ps-result-selected', index === selectedIndex);
+                tile.setAttribute('aria-pressed', String(index === selectedIndex));
+                let artwork = null;
+                if (item.kind === 'character') {
+                    artwork = document.createElement('span');
+                    artwork.className = 'ps-draw-result-artwork';
+                    const img = document.createElement('img');
+                    img.className = 'ps-draw-result-image';
+                    img.alt = '';
+                    img.src = host.getThumbnailUrl?.('avatar', item.avatar) ?? `/thumbnail?type=avatar&file=${encodeURIComponent(item.avatar)}`;
+                    img.addEventListener('error', () => img.remove());
+                    artwork.append(img);
+                }
+                const selectedMark = document.createElement('span');
+                selectedMark.className = 'ps-draw-result-check';
+                selectedMark.setAttribute('aria-hidden', 'true');
+                selectedMark.innerHTML = '<svg viewBox="0 0 20 20"><path d="m4.5 10.2 3.4 3.4 7.6-7.4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>';
+                const labels = document.createElement('span');
+                labels.className = 'ps-draw-result-labels';
+                const title = document.createElement('strong');
+                title.textContent = item.name;
+                labels.append(title);
+                if (item.subtitle) {
+                    const subtitle = document.createElement('small');
+                    subtitle.textContent = item.subtitle;
+                    labels.append(subtitle);
+                }
+                if (artwork) {
+                    const number = document.createElement('span');
+                    number.className = 'ps-draw-result-number';
+                    number.textContent = String(index + 1).padStart(2, '0');
+                    number.setAttribute('aria-hidden', 'true');
+                    artwork.append(number);
+                    tile.append(artwork, labels, selectedMark);
+                } else {
+                    tile.classList.add('ps-draw-preset-result');
+                    tile.append(labels, selectedMark);
+                }
+                grid.append(tile);
+            }
+            const noCandidates = !pool.length;
+            if (busy) status.textContent = '正在抽取…';
+            else if (mode === 'presets' && !canApplyPreset?.()) status.textContent = '预设抽取可用，但切换预设需要使用 OpenAI / 聊天补全。';
+            else if (currentSelection) status.textContent = mode === 'characters'
+                ? `已选中「${currentSelection.name}」，点击“开玩”进入聊天。`
+                : `已选中「${currentSelection.name}」，点击“切换预设”${currentSelection.scope === 'character' ? '应用到当前角色' : '应用到酒馆'}。`;
+            else if (noCandidates && mode === 'presets' && presetSource.scope === 'character') status.textContent = '当前角色还没有绑定预设。先绑定一个或多个预设后即可抽取。';
+            else if (noCandidates && mode === 'presets') status.textContent = '酒馆里还没有可抽取的 OpenAI / 聊天补全预设。';
+            else if (noCandidates && settings.drawScope === 'favorites') status.textContent = '没有可抽取的收藏角色。可在右上角切换范围，或先收藏角色。';
+            else if (noCandidates) status.textContent = '没有可抽取的角色。请先导入角色卡，或取消排除当前角色。';
+            else status.textContent = `点击下方按钮，随机抽取 ${settings.drawCount} 个${mode === 'characters' ? '角色' : '预设'}。`;
+            drawButton.textContent = results.length ? `再抽 ${settings.drawCount} 抽` : `抽 ${settings.drawCount} 抽`;
+            drawButton.disabled = busy || opening || noCandidates || (mode === 'presets' && !canApplyPreset?.());
+            actionButton.textContent = mode === 'characters' ? '开玩' : '切换预设';
+            actionButton.hidden = !currentSelection;
+            actionButton.disabled = busy || opening || (mode === 'presets' && !canApplyPreset?.());
             settingsButton.disabled = busy || opening;
             back.disabled = opening;
+            dialog.footer.classList.toggle('ps-draw-has-result', Boolean(currentSelection));
+            dialog.footer.classList.toggle('ps-draw-has-results', results.length > 0);
+            dialog.body.setAttribute('aria-busy', String(busy));
         }
 
         async function draw() {
             if (busy || opening) return;
-            const pool = candidates();
+            const pool = candidates(mode);
             if (!pool.length) { renderResult(); return; }
-            const settings = getSettings();
-            let available = settings.drawNoRepeat ? pool.filter(character => !drawn.has(character.avatar)) : pool;
-            if (!available.length) {
-                drawn.clear();
-                available = pool;
-                if (selected && pool.length > 1) available = pool.filter(character => character.avatar !== selected.avatar);
+            const count = getSettings().drawCount;
+            const result = [];
+            const seenThisBatch = new Set();
+            for (let i = 0; i < count; i++) {
+                let available = getSettings().drawNoRepeat ? pool.filter(item => !drawn[mode].has(item.key) && !seenThisBatch.has(item.key)) : pool;
+                if (!available.length) {
+                    drawn[mode].clear();
+                    available = pool.filter(item => !seenThisBatch.has(item.key));
+                    if (!available.length) available = pool;
+                }
+                const item = available[Math.floor(Math.random() * available.length)];
+                result.push(item);
+                seenThisBatch.add(item.key);
             }
-            const candidate = available[Math.floor(Math.random() * available.length)];
             let currentAnimation = null;
             busy = true;
             drawButton.disabled = true;
-            playButton.disabled = true;
+            actionButton.disabled = true;
             settingsButton.disabled = true;
-            dialog.body.setAttribute('aria-busy', 'true');
-            placeholder.hidden = false;
-            image.hidden = true;
-            name.textContent = '正在寻找下一位…';
-            status.textContent = '正在抽取…';
+            renderResult();
             try {
-                if (typeof card.animate === 'function' && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-                    currentAnimation = card.animate([
-                        { transform: 'rotateY(0deg) translateY(0)', opacity: 1 },
-                        { transform: 'rotateY(85deg) translateY(-10px)', opacity: .4, offset: .5 },
-                        { transform: 'rotateY(0deg) translateY(0)', opacity: 1 },
+                if (typeof stage.animate === 'function' && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                    currentAnimation = stage.animate([
+                        { transform: 'translateY(0) scale(1)', opacity: 1 },
+                        { transform: 'translateY(-8px) scale(.98)', opacity: .55, offset: .5 },
+                        { transform: 'translateY(0) scale(1)', opacity: 1 },
                     ], { duration: 460, easing: 'ease-in-out' });
                     animation = currentAnimation;
                     await currentAnimation.finished;
                 }
             } catch {
-                // The result remains usable when animation is cancelled or unavailable.
+                // Keep results usable when animation is cancelled or unavailable.
             } finally {
                 if (animation === currentAnimation) animation = null;
                 busy = false;
-                dialog.body.removeAttribute('aria-busy');
                 if (active === dialog) {
-                    selected = candidate;
-                    drawn.add(candidate.avatar);
+                    results = result;
+                    selectedIndex = 0;
+                    if (getSettings().drawNoRepeat) for (const item of results) drawn[mode].add(item.key);
                     renderResult();
                 }
             }
         }
 
-        async function play() {
+        async function actOnSelection() {
+            const selected = results[selectedIndex];
             if (!selected || busy || opening) return;
+            if (mode === 'presets') {
+                if (!canApplyPreset?.()) { renderResult(); return; }
+                opening = true;
+                renderResult();
+                try {
+                    const applied = await applyPreset(selected.source, selected.scope);
+                    if (applied && active === dialog) {
+                        toastr.success(`已切换到预设「${selected.name}」`);
+                        close();
+                    }
+                    else if (!applied) toastr.info('预设未切换，请确认当前 API 和目标预设仍可用');
+                } catch (error) {
+                    toastr.error(`切换预设失败：${error.message}`);
+                } finally {
+                    opening = false;
+                    if (active === dialog) renderResult();
+                }
+                return;
+            }
             const id = host.characters?.findIndex(character => character?.avatar === selected.avatar) ?? -1;
-            if (id < 0) { selected = null; renderResult(); toastr.warning('这张角色卡已不在角色库里，请重新抽取'); return; }
+            if (id < 0) { results = []; selectedIndex = -1; renderResult(); toastr.warning('这张角色卡已不在角色库里，请重新抽取'); return; }
             if (host.isGenerating?.() || host.isChatSaving) { toastr.info('请等当前聊天生成或保存完成后再开玩'); return; }
             if (typeof host.selectCharacterById !== 'function') { toastr.error('当前酒馆没有提供角色切换接口，请更新酒馆后再试'); return; }
             opening = true;

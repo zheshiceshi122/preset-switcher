@@ -84,7 +84,9 @@ function getUiSettings() {
         launcherVisible: value.launcherVisible !== false,
         launcherSize: Number.isInteger(value.launcherSize) && value.launcherSize >= 24 && value.launcherSize <= 80 ? value.launcherSize : DEFAULT_LAUNCHER_SIZE,
         characterDrawEnabled: value.characterDrawEnabled === true,
+        drawCount: Number.isInteger(value.drawCount) && value.drawCount >= 1 && value.drawCount <= 5 ? value.drawCount : 1,
         drawScope: value.drawScope === 'favorites' ? 'favorites' : 'all',
+        drawCurrentCharacterPresetsOnly: value.drawCurrentCharacterPresetsOnly !== false,
         drawExcludeCurrent: value.drawExcludeCurrent !== false,
         drawNoRepeat: value.drawNoRepeat !== false,
         editorCollapsedGroups: isObject(value.editorCollapsedGroups) ? value.editorCollapsedGroups : {},
@@ -251,11 +253,11 @@ function isCopyAlreadyApplied(entry) {
 }
 
 async function applyPreset(name, characterId = activeCharacterId()) {
-    if (characterId === null || characterId === undefined || selected_group || main_api !== 'openai' || activeCharacterId() !== characterId) return;
+    if (characterId === null || characterId === undefined || selected_group || main_api !== 'openai' || activeCharacterId() !== characterId) return false;
     const data = readCardData(characterId);
     const entry = findBoundPreset(data, name);
-    if (!entry) return;
-    if (applyingCharacterId !== null) return;
+    if (!entry) return false;
+    if (applyingCharacterId !== null) return false;
 
     const manager = getManager();
     const sourceName = sourcePresetName(entry);
@@ -263,14 +265,14 @@ async function applyPreset(name, characterId = activeCharacterId()) {
     if (option === undefined || option === null) {
         toastr.warning(`酒馆中找不到预设“${sourceName}”`);
         scheduleRender();
-        return;
+        return false;
     }
     if (isCopyAlreadyApplied(entry)) {
         if (data.activeName !== name) {
             data.activeName = name;
             await persist(data, characterId);
         }
-        return;
+        return true;
     }
 
     applyingCharacterId = characterId;
@@ -286,15 +288,59 @@ async function applyPreset(name, characterId = activeCharacterId()) {
         await completed;
         data.activeName = name;
         await persist(data, characterId);
+        return true;
     } catch (error) {
         console.error('[预设切换器] 应用预设失败', error);
         toastr.error(`应用预设“${name}”失败`);
+        return false;
     } finally {
         eventSource.removeListener(event_types.OAI_PRESET_CHANGED_AFTER, onApplied);
         applyingCharacterId = null;
         applyingEntryName = null;
         applyingPreserveApiSettings = false;
         scheduleRender();
+    }
+}
+
+async function applyGlobalPreset(name) {
+    if (main_api !== 'openai') return false;
+    const manager = getManager();
+    const option = manager?.findPreset?.(name);
+    if (option === undefined || option === null) {
+        toastr.warning(`酒馆中找不到预设“${name}”`);
+        return false;
+    }
+    if (manager.getSelectedPresetName?.() === name) return true;
+
+    const preserveApi = getUiSettings().preserveApiSettings;
+    const currentPreset = preserveApi && typeof chatCompletion.getChatCompletionPreset === 'function'
+        ? chatCompletion.getChatCompletionPreset()
+        : null;
+    let onApplying;
+    let onApplied;
+    const beforeApply = ({ preset, settingsToUpdate }) => {
+        if (!preserveApi || !isObject(preset) || !isObject(currentPreset)) return;
+        for (const [key, definition] of Object.entries(settingsToUpdate ?? {})) {
+            if (definition?.[3] !== true && key !== 'chat_completion_source') continue;
+            if (Object.hasOwn(currentPreset, key)) preset[key] = clone(currentPreset[key]);
+            else delete preset[key];
+        }
+    };
+    const completed = new Promise(resolve => { onApplied = resolve; });
+    onApplying = beforeApply;
+    eventSource.once(event_types.OAI_PRESET_CHANGED_BEFORE, onApplying);
+    eventSource.once(event_types.OAI_PRESET_CHANGED_AFTER, onApplied);
+    try {
+        await manager.selectPreset(option);
+        await completed;
+        return true;
+    } catch (error) {
+        console.error('[预设切换器] 应用全局预设失败', error);
+        toastr.error(`应用预设“${name}”失败`);
+        return false;
+    } finally {
+        eventSource.removeListener(event_types.OAI_PRESET_CHANGED_BEFORE, onApplying);
+        eventSource.removeListener(event_types.OAI_PRESET_CHANGED_AFTER, onApplied);
     }
 }
 
@@ -2008,6 +2054,21 @@ function createUi() {
         host: tavernHost, getSettings: getUiSettings, saveSettings: saveUiSettings, createDialog, makeButton,
         openPresets: openPresetPanel,
         canOpenPresets: () => activeCharacterId() !== null && activeCharacterId() !== undefined && main_api === 'openai',
+        getPresetPool: () => {
+            const characterId = activeCharacterId();
+            const settings = getUiSettings();
+            if (settings.drawCurrentCharacterPresetsOnly && characterId !== null && characterId !== undefined && characters?.[characterId]) {
+                return {
+                    scope: 'character',
+                    entries: readCardData(characterId).presets.filter(entry => presetNames().includes(sourcePresetName(entry))),
+                };
+            }
+            return { scope: 'global', entries: presetNames().map(name => ({ name, sourceName: name })) };
+        },
+        canApplyPreset: () => main_api === 'openai' && Boolean(getManager()),
+        applyPreset: (entry, scope) => scope === 'character'
+            ? applyPreset(entry.name, activeCharacterId())
+            : applyGlobalPreset(entry.name),
     });
     let pointerStart = null;
     let dragged = false;
