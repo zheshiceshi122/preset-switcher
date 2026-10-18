@@ -22,6 +22,7 @@ let presetPage = 1;
 let presetPager;
 let renderedCharacterId = null;
 let launcherVisibilityControl;
+let panelFollowControl;
 let characterDrawControl;
 let characterDraw;
 let initialized = false;
@@ -82,6 +83,7 @@ function getUiSettings() {
         topRatio: Number.isFinite(value.topRatio) ? Math.min(1, Math.max(0, value.topRatio)) : 0.68,
         launcherImage: typeof value.launcherImage === 'string' ? value.launcherImage : '',
         launcherVisible: value.launcherVisible !== false,
+        panelFollowsLauncher: value.panelFollowsLauncher === true,
         launcherSize: Number.isInteger(value.launcherSize) && value.launcherSize >= 24 && value.launcherSize <= 80 ? value.launcherSize : DEFAULT_LAUNCHER_SIZE,
         characterDrawEnabled: value.characterDrawEnabled === true,
         drawCount: Number.isInteger(value.drawCount) && value.drawCount >= 1 && value.drawCount <= 5 ? value.drawCount : 1,
@@ -130,10 +132,15 @@ function applyLauncherPosition(element, settings = getUiSettings()) {
     element.classList.toggle('ps-left-docked', settings.dockSide === 'left');
     element.classList.toggle('ps-right-docked', settings.dockSide === 'right');
     element.classList.toggle('ps-panel-below', top < window.innerHeight * .42);
+    element.classList.toggle('ps-panel-centered', !settings.panelFollowsLauncher);
     keepPanelInViewport(element);
 }
 
 function keepPanelInViewport(element) {
+    if (element.classList.contains('ps-panel-centered')) {
+        element.style.removeProperty('--ps-panel-shift');
+        return;
+    }
     const panel = element.querySelector('.ps-panel');
     if (panel.hidden || element.hidden) return;
     const rect = panel.getBoundingClientRect();
@@ -1669,7 +1676,16 @@ function openAppearanceDialog(setLauncherImageFromFile) {
     const showLauncherLabel = document.createElement('label');
     showLauncherLabel.className = 'ps-settings-checkbox';
     showLauncherLabel.append(showLauncher, document.createTextNode('显示悬浮球'));
-    body.append(showLauncherLabel);
+    const followLauncher = document.createElement('input');
+    followLauncher.type = 'checkbox';
+    followLauncher.checked = settings.panelFollowsLauncher;
+    const followLauncherLabel = document.createElement('label');
+    followLauncherLabel.className = 'ps-settings-checkbox';
+    followLauncherLabel.append(followLauncher, document.createTextNode('界面跟随悬浮球移动'));
+    const launcherOptions = document.createElement('div');
+    launcherOptions.className = 'ps-launcher-options';
+    launcherOptions.append(showLauncherLabel, followLauncherLabel);
+    body.append(launcherOptions);
     const imageUrl = document.createElement('input');
     imageUrl.className = 'text_pole';
     imageUrl.type = 'url';
@@ -1793,6 +1809,7 @@ function openAppearanceDialog(setLauncherImageFromFile) {
         saveUiSettings({
             launcherImage: imageSource,
             launcherVisible: showLauncher.checked,
+            panelFollowsLauncher: followLauncher.checked,
             launcherSize: size,
             viewMode: mode.value === 'quick' ? 'quick' : 'full',
             preserveApiSettings: preserve.checked,
@@ -1850,12 +1867,18 @@ function createExtensionSettings(openPanel, openSettings) {
     const settings = document.createElement('div');
     settings.id = 'preset-switcher-settings';
     settings.className = 'extension_container';
-    settings.innerHTML = '<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header"><b>预设切换器</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content"><label class="checkbox_label"><input id="preset-switcher-launcher-visible" type="checkbox">显示悬浮球</label><label class="checkbox_label"><input id="preset-switcher-draw-enabled" type="checkbox">开启角色抽卡</label><div class="ps-settings-actions"></div></div></div>';
+    settings.innerHTML = '<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header"><b>预设切换器</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content"><div class="ps-launcher-options"><label class="checkbox_label"><input id="preset-switcher-launcher-visible" type="checkbox">显示悬浮球</label><label class="checkbox_label"><input id="preset-switcher-panel-follow" type="checkbox">界面跟随悬浮球移动</label></div><label class="checkbox_label"><input id="preset-switcher-draw-enabled" type="checkbox">开启角色抽卡</label><div class="ps-settings-actions"></div></div></div>';
     launcherVisibilityControl = settings.querySelector('#preset-switcher-launcher-visible');
     launcherVisibilityControl.checked = getUiSettings().launcherVisible;
     launcherVisibilityControl.addEventListener('change', () => {
         saveUiSettings({ launcherVisible: launcherVisibilityControl.checked });
         if (!launcherVisibilityControl.checked) closeSwitcherPanel();
+        render();
+    });
+    panelFollowControl = settings.querySelector('#preset-switcher-panel-follow');
+    panelFollowControl.checked = getUiSettings().panelFollowsLauncher;
+    panelFollowControl.addEventListener('change', () => {
+        saveUiSettings({ panelFollowsLauncher: panelFollowControl.checked });
         render();
     });
     characterDrawControl = settings.querySelector('#preset-switcher-draw-enabled');
@@ -1883,6 +1906,7 @@ function render() {
     if (!root) return;
     const uiSettings = getUiSettings();
     if (launcherVisibilityControl) launcherVisibilityControl.checked = uiSettings.launcherVisible;
+    if (panelFollowControl) panelFollowControl.checked = uiSettings.panelFollowsLauncher;
     if (characterDrawControl) characterDrawControl.checked = uiSettings.characterDrawEnabled;
     const characterId = activeCharacterId();
     const character = characterId === null || characterId === undefined ? null : characters?.[characterId];

@@ -1,3 +1,10 @@
+.ps-launcher-options {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .4rem 1rem;
+}
+
 .ps-settings-actions {
     align-items: center;
     display: flex;
@@ -610,6 +617,15 @@
 #preset-switcher-root.ps-panel-below .ps-panel {
     bottom: auto;
     top: 3rem;
+}
+
+#preset-switcher-root.ps-panel-centered .ps-panel {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    right: auto;
+    bottom: auto;
+    transform: translate(-50%, -50%);
 }
 
 #preset-switcher-root .ps-header,
