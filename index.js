@@ -10,10 +10,13 @@ import { createCharacterDraw } from './character-draw.js';
 const DATA_KEY = 'preset_switcher';
 const UI_SETTINGS_KEY = 'preset_switcher_ui';
 const ROOT_ID = 'preset-switcher-root';
+const PANEL_ROOT_ID = 'preset-switcher-panel-root';
 const VERSION = 1;
 const MISSING = Symbol('missing');
 
 let root;
+let switcherPanel;
+let centeredPanelRoot;
 let applyingCharacterId = null;
 let applyingEntryName = null;
 let applyingPreserveApiSettings = false;
@@ -110,6 +113,10 @@ function getPromptPageSize(settings = getUiSettings()) {
 }
 
 function applyLauncherPosition(element, settings = getUiSettings()) {
+    const centered = !settings.panelFollowsLauncher;
+    const panelParent = centered ? centeredPanelRoot : element;
+    if (switcherPanel.parentElement !== panelParent) panelParent.append(switcherPanel);
+    centeredPanelRoot.hidden = !centered || element.hidden || switcherPanel.hidden;
     const hitSize = Math.max(48, settings.launcherSize + 16);
     element.style.setProperty('--ps-launcher-size', `${settings.launcherSize}px`);
     element.style.setProperty('--ps-launcher-hit-size', `${hitSize}px`);
@@ -141,7 +148,7 @@ function keepPanelInViewport(element) {
         element.style.removeProperty('--ps-panel-shift');
         return;
     }
-    const panel = element.querySelector('.ps-panel');
+    const panel = switcherPanel;
     if (panel.hidden || element.hidden) return;
     const rect = panel.getBoundingClientRect();
     const previousShift = Number.parseFloat(element.style.getPropertyValue('--ps-panel-shift')) || 0;
@@ -1857,7 +1864,8 @@ function openAppearanceDialog(setLauncherImageFromFile) {
 
 function closeSwitcherPanel() {
     if (!root) return;
-    root.querySelector('.ps-panel').hidden = true;
+    switcherPanel.hidden = true;
+    centeredPanelRoot.hidden = true;
     root.querySelector('.ps-launcher').setAttribute('aria-expanded', 'false');
 }
 
@@ -1911,9 +1919,9 @@ function render() {
     const characterId = activeCharacterId();
     const character = characterId === null || characterId === undefined ? null : characters?.[characterId];
     const canUsePresets = Boolean(character) && main_api === 'openai';
-    root.hidden = (!canUsePresets && !uiSettings.characterDrawEnabled) || (!uiSettings.launcherVisible && root.querySelector('.ps-panel').hidden);
+    root.hidden = (!canUsePresets && !uiSettings.characterDrawEnabled) || (!uiSettings.launcherVisible && switcherPanel.hidden);
     root.querySelector('.ps-launcher').hidden = !uiSettings.launcherVisible;
-    if (!root.hidden) applyLauncherPosition(root, uiSettings);
+    applyLauncherPosition(root, uiSettings);
 
     if (renderedCharacterId !== characterId) {
         renderedCharacterId = characterId;
@@ -1948,9 +1956,10 @@ function render() {
     launcher.setAttribute('aria-label', uiSettings.characterDrawEnabled ? '选择预设切换器或角色抽卡' : '打开预设切换器');
     launcher.disabled = !uiSettings.characterDrawEnabled && !canUsePresets;
 
-    const panel = root.querySelector('.ps-panel');
+    const panel = switcherPanel;
     if (!canUsePresets) {
         panel.hidden = true;
+        centeredPanelRoot.hidden = true;
         launcher.setAttribute('aria-expanded', 'false');
         return;
     }
@@ -2063,6 +2072,13 @@ function createUi() {
     document.body.append(element);
     const launcher = element.querySelector('.ps-launcher');
     const panel = element.querySelector('.ps-panel');
+    switcherPanel = panel;
+    // Keep a centered panel outside any launcher collector's transforms or clipping.
+    centeredPanelRoot = document.createElement('div');
+    centeredPanelRoot.id = PANEL_ROOT_ID;
+    centeredPanelRoot.className = 'ps-panel-centered';
+    centeredPanelRoot.hidden = true;
+    document.body.append(centeredPanelRoot);
     const openPresetPanel = () => {
         if (activeCharacterId() === null || activeCharacterId() === undefined || main_api !== 'openai') {
             toastr.info('请先打开角色卡聊天并切换到 OpenAI / 聊天补全');
@@ -2185,16 +2201,16 @@ function createUi() {
         launcher.setAttribute('aria-expanded', String(!panel.hidden));
         render();
     });
-    element.querySelector('.ps-close').addEventListener('click', () => {
+    panel.querySelector('.ps-close').addEventListener('click', () => {
         closeSwitcherPanel();
         render();
     });
-    element.querySelector('.ps-appearance-toggle').addEventListener('click', () => {
+    panel.querySelector('.ps-appearance-toggle').addEventListener('click', () => {
         openAppearanceDialog(setLauncherImageFromFile);
     });
     window.addEventListener('resize', () => applyLauncherPosition(element));
-    element.querySelector('.ps-add').addEventListener('click', async () => {
-        const select = element.querySelector('.ps-add-select');
+    panel.querySelector('.ps-add').addEventListener('click', async () => {
+        const select = panel.querySelector('.ps-add-select');
         if (select.value) await bindPreset(select.value);
     });
     createExtensionSettings(openPresetPanel, () => openAppearanceDialog(setLauncherImageFromFile));

@@ -509,7 +509,7 @@
     .ps-draw-result-labels strong { font-size: .92rem; }
 }
 
-#preset-switcher-root {
+:is(#preset-switcher-root, #preset-switcher-panel-root) {
     --ps-launcher-size: 40px;
     --ps-launcher-hit-size: 56px;
     --ps-bg: var(--SmartThemeBlurTintColor, rgba(28, 28, 35, 0.96));
@@ -525,12 +525,22 @@
     z-index: 1100;
 }
 
-#preset-switcher-root[hidden],
-#preset-switcher-root [hidden] {
+#preset-switcher-panel-root {
+    inset: 0;
+    width: auto;
+    pointer-events: none;
+}
+
+#preset-switcher-panel-root .ps-panel {
+    pointer-events: auto;
+}
+
+:is(#preset-switcher-root, #preset-switcher-panel-root)[hidden],
+:is(#preset-switcher-root, #preset-switcher-panel-root) [hidden] {
     display: none !important;
 }
 
-#preset-switcher-root .ps-launcher {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-launcher {
     align-items: center;
     background: transparent;
     border: 0;
@@ -547,11 +557,11 @@
     width: var(--ps-launcher-hit-size);
 }
 
-#preset-switcher-root .ps-launcher:active {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-launcher:active {
     cursor: grabbing;
 }
 
-#preset-switcher-root .ps-launcher-face {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-launcher-face {
     align-items: center;
     background: var(--SmartThemeQuoteColor, #6955c7);
     border: 1px solid var(--ps-border);
@@ -569,7 +579,7 @@
     width: var(--ps-launcher-size);
 }
 
-#preset-switcher-root .ps-launcher-image {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-launcher-image {
     inset: 0;
     height: 100%;
     object-fit: cover;
@@ -577,18 +587,18 @@
     width: 100%;
 }
 
-#preset-switcher-root .ps-launcher-label {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-launcher-label {
     line-height: 1;
     position: relative;
 }
 
-#preset-switcher-root .ps-launcher:disabled {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-launcher:disabled {
     cursor: default;
     filter: grayscale(.75);
     opacity: .65;
 }
 
-#preset-switcher-root .ps-panel {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-panel {
     background: var(--ps-bg);
     border: 1px solid var(--ps-border);
     border-radius: .8rem;
@@ -605,21 +615,21 @@
     backdrop-filter: blur(18px);
 }
 
-#preset-switcher-root.ps-left-docked .ps-panel {
+:is(#preset-switcher-root, #preset-switcher-panel-root).ps-left-docked .ps-panel {
     left: calc(var(--ps-launcher-hit-size) / 2);
     right: auto;
 }
 
-#preset-switcher-root.ps-right-docked .ps-panel {
+:is(#preset-switcher-root, #preset-switcher-panel-root).ps-right-docked .ps-panel {
     right: calc(var(--ps-launcher-hit-size) / 2);
 }
 
-#preset-switcher-root.ps-panel-below .ps-panel {
+:is(#preset-switcher-root, #preset-switcher-panel-root).ps-panel-below .ps-panel {
     bottom: auto;
     top: 3rem;
 }
 
-#preset-switcher-root.ps-panel-centered .ps-panel {
+:is(#preset-switcher-root, #preset-switcher-panel-root).ps-panel-centered .ps-panel {
     position: fixed;
     left: 50%;
     top: 50%;
@@ -628,35 +638,35 @@
     transform: translate(-50%, -50%);
 }
 
-#preset-switcher-root .ps-header,
-#preset-switcher-root .ps-bind,
-#preset-switcher-root .ps-entry-heading,
-#preset-switcher-root .ps-actions,
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-header,
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-bind,
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-entry-heading,
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-actions,
 .ps-dialog-footer {
     align-items: center;
     display: flex;
     gap: .5rem;
 }
 
-#preset-switcher-root .ps-header {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-header {
     border-bottom: 1px solid var(--ps-border);
     justify-content: space-between;
     padding: .8rem 1rem;
 }
 
-#preset-switcher-root .ps-header-actions {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-header-actions {
     align-items: center;
     display: flex;
     gap: .4rem;
 }
 
-#preset-switcher-root .ps-header-actions button {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-header-actions button {
     flex: 0 0 auto;
     margin: 0;
     white-space: nowrap;
 }
 
-#preset-switcher-root .ps-header-actions .ps-icon-button {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-header-actions .ps-icon-button {
     align-items: center;
     background: transparent;
     border: 1px solid var(--ps-border);
@@ -669,12 +679,12 @@
     width: 1.85rem;
 }
 
-#preset-switcher-root .ps-icon-button:hover {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-icon-button:hover {
     background: color-mix(in srgb, var(--SmartThemeQuoteColor, #6955c7) 25%, transparent);
     color: var(--ps-text);
 }
 
-#preset-switcher-root .ps-icon-button svg {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-icon-button svg {
     height: 1.1rem;
     width: 1.1rem;
 }
@@ -708,7 +718,7 @@
     margin: 0;
 }
 
-#preset-switcher-root .ps-quick-mode .ps-entry {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-quick-mode .ps-entry {
     align-items: center;
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -716,29 +726,29 @@
     padding: .65rem .75rem;
 }
 
-#preset-switcher-root .ps-quick-mode .ps-entry-heading {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-quick-mode .ps-entry-heading {
     margin: 0;
 }
 
-#preset-switcher-root .ps-quick-mode .ps-entry-title {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-quick-mode .ps-entry-title {
     font-size: .95rem;
 }
 
-#preset-switcher-root .ps-quick-mode .ps-entry-subtitle {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-quick-mode .ps-entry-subtitle {
     grid-column: 1;
     margin: 0;
 }
 
-#preset-switcher-root .ps-quick-mode .ps-actions {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-quick-mode .ps-actions {
     grid-column: 2;
     grid-row: 1 / span 2;
 }
 
-#preset-switcher-root .ps-quick-mode .ps-actions button {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-quick-mode .ps-actions button {
     padding: .3rem .55rem;
 }
 
-#preset-switcher-root .ps-close {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-close {
     background: transparent;
     border: 0;
     color: var(--ps-muted);
@@ -747,14 +757,14 @@
     line-height: 1;
 }
 
-#preset-switcher-root .ps-message,
-#preset-switcher-root .ps-empty {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-message,
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-empty {
     color: var(--ps-muted);
     font-size: .88rem;
     margin: .75rem 1rem;
 }
 
-#preset-switcher-root .ps-list {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-list {
     flex: 1 1 auto;
     max-height: none;
     min-height: 0;
@@ -763,10 +773,10 @@
     padding: 0 .75rem;
 }
 
-#preset-switcher-root .ps-header,
-#preset-switcher-root .ps-message,
-#preset-switcher-root .ps-bind,
-#preset-switcher-root .ps-pagination {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-header,
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-message,
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-bind,
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-pagination {
     flex: 0 0 auto;
 }
 
@@ -815,31 +825,31 @@
     opacity: .45;
 }
 
-#preset-switcher-root .ps-entry {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-entry {
     border: 1px solid var(--ps-border);
     border-radius: .6rem;
     margin-bottom: .55rem;
     padding: .65rem;
 }
 
-#preset-switcher-root .ps-entry-heading {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-entry-heading {
     align-items: center;
     flex-wrap: wrap;
     justify-content: space-between;
     margin-bottom: .5rem;
 }
 
-#preset-switcher-root .ps-entry-title {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-entry-title {
     font-size: 1rem;
     overflow-wrap: anywhere;
 }
 
-#preset-switcher-root .ps-status {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-status {
     color: var(--ps-muted);
     font-size: .76rem;
 }
 
-#preset-switcher-root .ps-entry-subtitle {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-entry-subtitle {
     color: var(--ps-muted);
     font-size: .8rem;
     margin: -.2rem 0 .5rem;
@@ -847,11 +857,11 @@
     white-space: pre-wrap;
 }
 
-#preset-switcher-root .ps-actions {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-actions {
     flex-wrap: wrap;
 }
 
-#preset-switcher-root .ps-actions button {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-actions button {
     flex: 0 0 auto;
     font-size: .82rem;
     margin: 0;
@@ -859,27 +869,27 @@
     white-space: nowrap;
 }
 
-#preset-switcher-root .ps-selected,
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-selected,
 .ps-primary {
     background: var(--SmartThemeQuoteColor, #6955c7) !important;
     color: #fff !important;
 }
 
-#preset-switcher-root .ps-danger {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-danger {
     margin-left: auto !important;
 }
 
-#preset-switcher-root .ps-bind {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-bind {
     border-top: 1px solid var(--ps-border);
     padding: .7rem .75rem;
 }
 
-#preset-switcher-root .ps-add-select {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-add-select {
     flex: 1;
     min-width: 0;
 }
 
-#preset-switcher-root .ps-bind button {
+:is(#preset-switcher-root, #preset-switcher-panel-root) .ps-bind button {
     flex: 0 0 auto;
     white-space: nowrap;
 }
@@ -1539,20 +1549,20 @@
         padding: .2rem .3rem !important;
     }
 
-    #preset-switcher-root .ps-panel {
+    :is(#preset-switcher-root, #preset-switcher-panel-root) .ps-panel {
         max-height: 68vh;
     }
 
-    #preset-switcher-root .ps-actions {
+    :is(#preset-switcher-root, #preset-switcher-panel-root) .ps-actions {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
-    #preset-switcher-root .ps-quick-mode .ps-actions {
+    :is(#preset-switcher-root, #preset-switcher-panel-root) .ps-quick-mode .ps-actions {
         display: flex;
     }
 
-    #preset-switcher-root .ps-actions button {
+    :is(#preset-switcher-root, #preset-switcher-panel-root) .ps-actions button {
         box-sizing: border-box;
         justify-content: center;
         min-width: 0;
@@ -1560,11 +1570,11 @@
         width: 100%;
     }
 
-    #preset-switcher-root .ps-actions .ps-danger {
+    :is(#preset-switcher-root, #preset-switcher-panel-root) .ps-actions .ps-danger {
         margin-left: 0 !important;
     }
 
-    #preset-switcher-root .ps-bind .ps-add {
+    :is(#preset-switcher-root, #preset-switcher-panel-root) .ps-bind .ps-add {
         flex: 0 0 auto;
         min-width: 4rem;
         white-space: nowrap;
