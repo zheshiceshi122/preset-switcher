@@ -527,7 +527,11 @@
 
 #preset-switcher-panel-root {
     inset: 0;
-    width: auto;
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    display: grid;
+    place-items: center;
     pointer-events: none;
 }
 
@@ -629,13 +633,14 @@
     top: 3rem;
 }
 
-:is(#preset-switcher-root, #preset-switcher-panel-root).ps-panel-centered .ps-panel {
-    position: fixed;
-    left: 50%;
-    top: 50%;
+#preset-switcher-panel-root .ps-panel {
+    /* ST's transformed, zero-height <html> cannot anchor percentage positioning. */
+    position: relative;
+    left: auto;
+    top: auto;
     right: auto;
     bottom: auto;
-    transform: translate(-50%, -50%);
+    transform: none;
 }
 
 :is(#preset-switcher-root, #preset-switcher-panel-root) .ps-header,
