@@ -19,7 +19,7 @@ let switcherPanel;
 let centeredPanelRoot;
 let applyingCharacterId = null;
 let applyingEntryName = null;
-let applyingPreserveApiSettings = false;
+let presetSelectionInProgress = false;
 let renderQueued = false;
 let presetPage = 1;
 let presetPager;
@@ -266,12 +266,49 @@ function isCopyAlreadyApplied(entry) {
     });
 }
 
+async function selectPresetWithApiSettings(manager, option) {
+    if (presetSelectionInProgress) throw new Error('请等待当前预设切换完成');
+    presetSelectionInProgress = true;
+    const preserveApi = getUiSettings().preserveApiSettings;
+    const settings = chatCompletion.oai_settings;
+    const bindingBefore = settings?.bind_preset_to_connection;
+    const suspendBinding = preserveApi && bindingBefore === true;
+    let onApplied;
+    const completed = new Promise(resolve => { onApplied = resolve; });
+    const beforeApply = ({ preset, settingsToUpdate }) => {
+        if (!preserveApi || !isObject(preset)) return;
+        const definitions = settingsToUpdate ?? chatCompletion.settingsToUpdate ?? {};
+        for (const [key, definition] of Object.entries(definitions)) {
+            if (definition?.[3] === true) delete preset[key];
+        }
+        delete preset.chat_completion_source;
+    };
+    eventSource.once(event_types.OAI_PRESET_CHANGED_BEFORE, beforeApply);
+    eventSource.once(event_types.OAI_PRESET_CHANGED_AFTER, onApplied);
+    try {
+        // ST also rebuilds model selectors and reconnects when binding is enabled,
+        // even if connection fields have been removed from the incoming preset.
+        if (suspendBinding) settings.bind_preset_to_connection = false;
+        await manager.selectPreset(option);
+        // Some hosts return before the asynchronous preset application finishes.
+        await completed;
+    } finally {
+        eventSource.removeListener(event_types.OAI_PRESET_CHANGED_BEFORE, beforeApply);
+        eventSource.removeListener(event_types.OAI_PRESET_CHANGED_AFTER, onApplied);
+        if (suspendBinding) {
+            settings.bind_preset_to_connection = bindingBefore;
+            saveSettingsDebounced();
+        }
+        presetSelectionInProgress = false;
+    }
+}
+
 async function applyPreset(name, characterId = activeCharacterId()) {
     if (characterId === null || characterId === undefined || selected_group || main_api !== 'openai' || activeCharacterId() !== characterId) return false;
     const data = readCardData(characterId);
     const entry = findBoundPreset(data, name);
     if (!entry) return false;
-    if (applyingCharacterId !== null) return false;
+    if (applyingCharacterId !== null || presetSelectionInProgress) return false;
 
     const manager = getManager();
     const sourceName = sourcePresetName(entry);
@@ -291,15 +328,9 @@ async function applyPreset(name, characterId = activeCharacterId()) {
 
     applyingCharacterId = characterId;
     applyingEntryName = entry.name;
-    applyingPreserveApiSettings = getUiSettings().preserveApiSettings;
-    let onApplied;
-    const completed = new Promise(resolve => { onApplied = resolve; });
-    eventSource.once(event_types.OAI_PRESET_CHANGED_AFTER, onApplied);
     scheduleRender();
     try {
-        await manager.selectPreset(option);
-        // TauriTavern's selectPreset does not return the asynchronous application.
-        await completed;
+        await selectPresetWithApiSettings(manager, option);
         data.activeName = name;
         await persist(data, characterId);
         return true;
@@ -308,16 +339,14 @@ async function applyPreset(name, characterId = activeCharacterId()) {
         toastr.error(`应用预设“${name}”失败`);
         return false;
     } finally {
-        eventSource.removeListener(event_types.OAI_PRESET_CHANGED_AFTER, onApplied);
         applyingCharacterId = null;
         applyingEntryName = null;
-        applyingPreserveApiSettings = false;
         scheduleRender();
     }
 }
 
 async function applyGlobalPreset(name) {
-    if (main_api !== 'openai') return false;
+    if (main_api !== 'openai' || applyingCharacterId !== null || presetSelectionInProgress) return false;
     const manager = getManager();
     const option = manager?.findPreset?.(name);
     if (option === undefined || option === null) {
@@ -326,35 +355,13 @@ async function applyGlobalPreset(name) {
     }
     if (manager.getSelectedPresetName?.() === name) return true;
 
-    const preserveApi = getUiSettings().preserveApiSettings;
-    const currentPreset = preserveApi && typeof chatCompletion.getChatCompletionPreset === 'function'
-        ? chatCompletion.getChatCompletionPreset()
-        : null;
-    let onApplying;
-    let onApplied;
-    const beforeApply = ({ preset, settingsToUpdate }) => {
-        if (!preserveApi || !isObject(preset) || !isObject(currentPreset)) return;
-        for (const [key, definition] of Object.entries(settingsToUpdate ?? {})) {
-            if (definition?.[3] !== true && key !== 'chat_completion_source') continue;
-            if (Object.hasOwn(currentPreset, key)) preset[key] = clone(currentPreset[key]);
-            else delete preset[key];
-        }
-    };
-    const completed = new Promise(resolve => { onApplied = resolve; });
-    onApplying = beforeApply;
-    eventSource.once(event_types.OAI_PRESET_CHANGED_BEFORE, onApplying);
-    eventSource.once(event_types.OAI_PRESET_CHANGED_AFTER, onApplied);
     try {
-        await manager.selectPreset(option);
-        await completed;
+        await selectPresetWithApiSettings(manager, option);
         return true;
     } catch (error) {
         console.error('[预设切换器] 应用全局预设失败', error);
         toastr.error(`应用预设“${name}”失败`);
         return false;
-    } finally {
-        eventSource.removeListener(event_types.OAI_PRESET_CHANGED_BEFORE, onApplying);
-        eventSource.removeListener(event_types.OAI_PRESET_CHANGED_AFTER, onApplied);
     }
 }
 
@@ -2230,7 +2237,7 @@ export function init() {
     if (initialized) return;
     root = createUi();
     // Inject the character copy before BaiBai's early render and group cache.
-    eventSource.makeFirst(event_types.OAI_PRESET_CHANGED_BEFORE, ({ preset, presetName, settingsToUpdate }) => {
+    eventSource.makeFirst(event_types.OAI_PRESET_CHANGED_BEFORE, ({ preset, presetName }) => {
         const currentId = activeCharacterId();
         const characterId = applyingCharacterId === currentId ? applyingCharacterId : currentId;
         if (characterId === null || characterId === undefined || !isObject(preset)) return;
@@ -2245,13 +2252,6 @@ export function init() {
         if (!entry || sourcePresetName(entry) !== presetName) return;
         for (const key of Object.keys(preset)) delete preset[key];
         Object.assign(preset, clone(entry.value));
-        if (applyingPreserveApiSettings && applyingCharacterId === characterId) {
-            for (const [key, definition] of Object.entries(settingsToUpdate ?? {})) {
-                if (definition?.[3] === true || key === 'chat_completion_source') delete preset[key];
-            }
-            // Older SillyTavern builds may not pass this map to the event.
-            delete preset.chat_completion_source;
-        }
     });
     eventSource.makeLast(event_types.CHAT_CHANGED, onChatChanged);
     eventSource.on(event_types.APP_READY, () => {
